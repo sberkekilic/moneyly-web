@@ -112,22 +112,19 @@ export const createTransaction = (
     isInstallmentPaid: false,
     paidAmount: 0,
     transactionType: TransactionType.normal,
-    // ── Required fields ──
     title,
     amount,
     category,
-    // ── Optional fields → undefined not null ──
+    // ── All optional fields must be undefined, NOT null ──
     initialInstallmentDate: undefined,
     installment:            undefined,
     currentInstallment:     undefined,
     totalAmount:            undefined,
     parentTransactionId:    undefined,
     installmentIndex:       undefined,
-    // ── Spread overrides last ──
     ...rest,
   };
 };
-
 
 export const copyTransaction = (
   t: Transaction,
