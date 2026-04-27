@@ -22,11 +22,15 @@ export interface InvestmentModel {
 
 export const createInvestment = (
   partial: Partial<Investment> & Pick<Investment, 'name' | 'category'>
-): Investment => ({
-  id: Date.now(),
-  category: partial.category,
-  currency: 'TRY',
-  name: partial.name,
-  amount: '0',
-  ...partial,
-});
+): Investment => {
+  const { name, category, ...rest } = partial;
+
+  return {
+    id: Date.now(),
+    category,
+    currency: 'TRY',
+    name,
+    amount: '0',
+    ...rest,
+  };
+};

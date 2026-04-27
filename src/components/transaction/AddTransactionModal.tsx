@@ -54,11 +54,17 @@ export function AddTransactionModal({
       return;
     }
 
-    const installmentCount =
-      txType === TransactionType.installment ? parseInt(installments) || 1 : null;
-    const totalAmount =
-      installmentCount && installmentCount > 1 ? parsedAmount : null;
-    
+    // ── null → undefined ──────────────────────────────────
+    const installmentCount: number | undefined =
+      txType === TransactionType.installment
+        ? parseInt(installments) || 1
+        : undefined;
+
+    const totalAmount: number | undefined =
+      installmentCount && installmentCount > 1
+        ? parsedAmount
+        : undefined;
+
     const installmentAmount = totalAmount
       ? totalAmount / installmentCount!
       : parsedAmount;
@@ -66,7 +72,7 @@ export function AddTransactionModal({
     const newTx = createTransaction({
       title: title.trim(),
       amount: installmentAmount,
-      totalAmount,
+      totalAmount,                              // number | undefined ✅
       category: category.trim() || 'Diğer',
       subcategory: subcategory.trim() || 'Genel',
       date: new Date(date).toISOString(),
@@ -75,25 +81,22 @@ export function AddTransactionModal({
       description: description.trim(),
       isFromInvoice: false,
       isProvisioned: txType === TransactionType.provisioned,
-      installment: installmentCount,
+      installment: installmentCount,            // number | undefined ✅
       transactionType: txType,
-      currentInstallment: installmentCount ? 1 : null,
+      currentInstallment: installmentCount ? 1 : undefined, // ✅
     });
 
-    // Add to account FIRST (localStorage) - this is the critical part
     if (selectedAccount?.accountId && selectedAccount?.bankId) {
       AccountService.addTransactionToAccount(
-        selectedAccount.accountId, 
-        selectedAccount.bankId, 
+        selectedAccount.accountId,
+        selectedAccount.bankId,
         newTx
       );
-      console.log('Transaction added to account locally');
     }
 
-  await addTransaction(newTx, selectedAccount.accountId, selectedAccount.bankId);
-  toast.success('İşlem eklendi');
-  onClose();
-
+    await addTransaction(newTx, selectedAccount.accountId, selectedAccount.bankId);
+    toast.success('İşlem eklendi');
+    onClose();
   };
 
   return (

@@ -61,15 +61,19 @@ export const isCreditCard = (account: Account): boolean => !account.isDebit;
 
 export const createAccount = (
   partial: Partial<Account> & Pick<Account, 'name' | 'currency'>
-): Account => ({
-  accountId: Date.now(),
-  name: partial.name,
-  type: 'debit',
-  balance: 0,
-  transactions: [],
-  debts: [],
-  currency: partial.currency,
-  isDebit: true,
-  cutoffDate: 1,
-  ...partial,
-});
+): Account => {
+  const { name, currency, ...rest } = partial;
+
+  return {
+    accountId: Date.now(),
+    name,
+    type: 'debit',
+    balance: 0,
+    transactions: [],
+    debts: [],
+    currency,
+    isDebit: true,
+    cutoffDate: 1,
+    ...rest,
+  };
+};

@@ -21,7 +21,7 @@ interface AuthState {
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   loadUserProfile: (uid: string) => Promise<void>;
-  initialize: () => void;
+  initialize: () => () => void;
 }
 
 export const useAuthStore = create<AuthState>((set, get) => ({
@@ -30,21 +30,22 @@ export const useAuthStore = create<AuthState>((set, get) => ({
   isLoading: true,
   error: null,
 
-  initialize: () => {
-    onAuthStateChanged(auth, async (user) => {
-      if (user) {
-        set({ user, isLoading: true });
-        try {
-          await get().loadUserProfile(user.uid);
-        } catch {
-          // Profile load failed, but user is still authenticated
-          set({ isLoading: false });
-        }
-      } else {
-        set({ user: null, profile: null, isLoading: false });
+initialize: () => {
+  const unsubscribe = onAuthStateChanged(auth, async (user) => {
+    if (user) {
+      set({ user, isLoading: true });
+      try {
+        await get().loadUserProfile(user.uid);
+      } catch {
+        set({ isLoading: false });
       }
-    });
-  },
+    } else {
+      set({ user: null, profile: null, isLoading: false });
+    }
+  });
+
+  return unsubscribe; // ← return cleanup
+},
 
   loadUserProfile: async (uid: string) => {
     try {

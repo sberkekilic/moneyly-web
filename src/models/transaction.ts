@@ -96,27 +96,37 @@ export const getInstallmentPosition = (t: Transaction): number => {
 
 export const createTransaction = (
   partial: Partial<Transaction> & Pick<Transaction, 'title' | 'amount' | 'category'>
-): Transaction => ({
-  transactionId: Date.now(),
-  date: new Date().toISOString(),
-  currency: 'TRY',
-  subcategory: '',
-  description: '',
-  isSurplus: false,
-  isFromInvoice: false,
-  initialInstallmentDate: null,  // Use null instead of undefined
-  isProvisioned: false,
-  isInstallmentCompleted: false,
-  isInstallmentPaid: false,
-  paidAmount: 0,
-  installment: null,  // Use null instead of undefined
-  currentInstallment: null,  // Use null instead of undefined
-  totalAmount: null,  // Use null instead of undefined
-  transactionType: TransactionType.normal,
-  parentTransactionId: null,  // Use null instead of undefined
-  installmentIndex: null,  // Use null instead of undefined
-  ...partial,
-});
+): Transaction => {
+  const { title, amount, category, ...rest } = partial;
+
+  return {
+    transactionId: Date.now(),
+    date: new Date().toISOString(),
+    currency: 'TRY',
+    subcategory: '',
+    description: '',
+    isSurplus: false,
+    isFromInvoice: false,
+    isProvisioned: false,
+    isInstallmentCompleted: false,
+    isInstallmentPaid: false,
+    paidAmount: 0,
+    transactionType: TransactionType.normal,
+    // ── Required fields ──
+    title,
+    amount,
+    category,
+    // ── Optional fields → undefined not null ──
+    initialInstallmentDate: undefined,
+    installment:            undefined,
+    currentInstallment:     undefined,
+    totalAmount:            undefined,
+    parentTransactionId:    undefined,
+    installmentIndex:       undefined,
+    // ── Spread overrides last ──
+    ...rest,
+  };
+};
 
 
 export const copyTransaction = (

@@ -107,24 +107,24 @@ export function EditTransactionModal({
       return;
     }
 
-    // Recalculate amounts for installments
-    const installmentCount =
+    // ── null → undefined ──────────────────────────────────
+    const installmentCount: number | undefined =
       txType === TransactionType.installment
         ? parseInt(installments) || transaction.installment || 1
-        : null;
+        : undefined;
 
-    const totalAmount =
-      installmentCount && installmentCount > 1 ? parsedAmount : null;
+    const totalAmount: number | undefined =
+      installmentCount && installmentCount > 1 ? parsedAmount : undefined;
 
     const installmentAmount = totalAmount
       ? totalAmount / installmentCount!
       : parsedAmount;
 
     const updatedTx: Transaction = {
-      ...transaction,                    // keep all original fields
+      ...transaction,
       title: title.trim(),
       amount: installmentAmount,
-      totalAmount,
+      totalAmount,                    // number | undefined ✅
       category: category.trim() || 'Diğer',
       subcategory: subcategory.trim() || 'Genel',
       date: new Date(date).toISOString(),
@@ -132,7 +132,7 @@ export function EditTransactionModal({
       isSurplus,
       description: description.trim(),
       isProvisioned: txType === TransactionType.provisioned,
-      installment: installmentCount,
+      installment: installmentCount,  // number | undefined ✅
       transactionType: txType,
     };
 
