@@ -1,4 +1,3 @@
-// src/components/AuthInitializer.tsx
 'use client';
 
 import { useEffect } from 'react';
@@ -8,17 +7,9 @@ export function AuthInitializer() {
   const initialize = useAuthStore((state) => state.initialize);
 
   useEffect(() => {
-    // Initialize Firebase Auth listener
     const unsubscribe = initialize();
-    
-    // Cleanup function
-    return () => {
-      if (unsubscribe && typeof unsubscribe === 'function') {
-        unsubscribe();
-      }
-    };
+    return unsubscribe;
   }, [initialize]);
 
-  // This component doesn't render anything
   return null;
 }
