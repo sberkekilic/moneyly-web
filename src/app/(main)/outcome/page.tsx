@@ -183,10 +183,9 @@ export default function OutcomePage() {
   };
 
   const getAccountTransactions = (): Transaction[] => {
-    const txs = selectedAccount?.transactions ?? [];
-    // If no date range set, return all
+    const txs: Transaction[] = selectedAccount?.transactions ?? [];
     if (!startDate && !endDate) return txs;
-    return txs.filter((tx) => {
+    return txs.filter((tx: Transaction) => {
       const d = parseLocalDateInput(tx.date);
       return isDateInRangeInclusive(d, startDate, endDate);
     });
