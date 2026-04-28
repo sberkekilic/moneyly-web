@@ -1,3 +1,4 @@
+// src/components/transaction/AddTransactionModal.tsx
 'use client';
 
 import { useState } from 'react';
@@ -13,6 +14,25 @@ interface AddTransactionModalProps {
   selectedAccount: any;
   isCreditCard?: boolean;
   onClose: () => void;
+}
+
+/**
+ * Parses a "YYYY-MM-DD" date string as LOCAL midnight (avoids UTC timezone shift).
+ * e.g. "2025-12-21" → Dec 21 2025 00:00:00 local time
+ */
+function parseLocalDate(dateStr: string): Date {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  return new Date(y, m - 1, d, 12, 0, 0); // noon to be safe
+}
+
+/**
+ * Returns "YYYY-MM-DD" from a local Date without UTC shift.
+ */
+function toLocalISOString(date: Date): string {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}T12:00:00.000Z`;
 }
 
 export function AddTransactionModal({
@@ -33,10 +53,8 @@ export function AddTransactionModal({
   const [currency, setCurrency] = useState('TRY');
   const [isSurplus, setIsSurplus] = useState(false);
   const [description, setDescription] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // ── FIX: Determine available transaction types ──
-  // Bank accounts: ONLY normal
-  // Credit cards:  normal + installment + provisioned
   const availableTypes = isCreditCard
     ? [
         { type: TransactionType.normal,      label: 'Normal',    icon: <CreditCard size={14} />, color: 'bg-blue-500',   desc: 'Tek seferlik ödeme' },
@@ -44,7 +62,7 @@ export function AddTransactionModal({
         { type: TransactionType.provisioned, label: 'Provizyon', icon: <Clock size={14} />,      color: 'bg-orange-500', desc: 'Henüz kesinleşmemiş' },
       ]
     : [
-        { type: TransactionType.normal,      label: 'Normal',    icon: <CreditCard size={14} />, color: 'bg-blue-500',   desc: 'Tek seferlik ödeme' },
+        { type: TransactionType.normal, label: 'Normal', icon: <CreditCard size={14} />, color: 'bg-blue-500', desc: 'Tek seferlik ödeme' },
       ];
 
   const handleSubmit = async () => {
@@ -54,53 +72,134 @@ export function AddTransactionModal({
       return;
     }
 
-    // ── null → undefined ──────────────────────────────────
-    const installmentCount: number | undefined =
-      txType === TransactionType.installment
-        ? parseInt(installments) || 1
-        : undefined;
+    setIsSubmitting(true);
+    try {
+      const isInstallment =
+        txType === TransactionType.installment &&
+        isCreditCard &&
+        parseInt(installments) > 1;
 
-    const totalAmount: number | undefined =
-      installmentCount && installmentCount > 1
-        ? parsedAmount
-        : undefined;
+      if (isInstallment) {
+        // ── INSTALLMENT PATH ─────────────────────────────
+        const installmentCount = parseInt(installments);
+        const totalAmount = parsedAmount;
+        const installmentAmount = Math.round((totalAmount / installmentCount) * 100) / 100;
 
-    const installmentAmount = totalAmount
-      ? totalAmount / installmentCount!
-      : parsedAmount;
+        // Use a shared ID so all installments of this purchase are linked
+        const parentId = Date.now();
 
-    const newTx = createTransaction({
-      title: title.trim(),
-      amount: installmentAmount,
-      totalAmount,                              // number | undefined ✅
-      category: category.trim() || 'Diğer',
-      subcategory: subcategory.trim() || 'Genel',
-      date: new Date(date).toISOString(),
-      isSurplus,
-      currency,
-      description: description.trim(),
-      isFromInvoice: false,
-      isProvisioned: txType === TransactionType.provisioned,
-      installment: installmentCount,            // number | undefined ✅
-      transactionType: txType,
-      currentInstallment: installmentCount ? 1 : undefined, // ✅
-    });
+        // Parse the user-entered date as local time (first installment date)
+        const firstDate = parseLocalDate(date);
 
-    if (selectedAccount?.accountId && selectedAccount?.bankId) {
-      AccountService.addTransactionToAccount(
-        selectedAccount.accountId,
-        selectedAccount.bankId,
-        newTx
-      );
+        const allTransactions = Array.from({ length: installmentCount }, (_, i) => {
+          // i=0 → first installment on the entered date (e.g. Dec 21 2025)
+          // i=1 → second installment one month later (Jan 21 2026)
+          // etc.
+          const txDate = new Date(
+            firstDate.getFullYear(),
+            firstDate.getMonth() + i,   // ← month offset, JS handles year rollover
+            firstDate.getDate(),
+            12, 0, 0
+          );
+
+          return createTransaction({
+            title: title.trim(),
+            amount: installmentAmount,
+            totalAmount,
+            category: category.trim() || 'Diğer',
+            subcategory: subcategory.trim() || 'Genel',
+            // Store as local ISO so display is never shifted
+            date: toLocalISOString(txDate),
+            isSurplus,
+            currency,
+            description: description.trim(),
+            isFromInvoice: false,
+            isProvisioned: false,
+            installment: installmentCount,
+            currentInstallment: i + 1,          // 1-based
+            parentTransactionId: parentId,
+            initialInstallmentDate: toLocalISOString(firstDate),
+            transactionType: txType,
+          });
+        });
+
+        // Save all installments one by one (or batch if your store supports it)
+        for (const tx of allTransactions) {
+          await addTransaction(tx, selectedAccount.accountId, selectedAccount.bankId);
+        }
+
+        toast.success(
+          `${installmentCount} taksit eklendi — her biri ${installmentAmount.toFixed(2)} ${currency}`
+        );
+      } else {
+        // ── NORMAL / PROVISIONED PATH ────────────────────
+        const txDate = parseLocalDate(date);
+
+        const newTx = createTransaction({
+          title: title.trim(),
+          amount: parsedAmount,
+          totalAmount: undefined,
+          category: category.trim() || 'Diğer',
+          subcategory: subcategory.trim() || 'Genel',
+          date: toLocalISOString(txDate),
+          isSurplus,
+          currency,
+          description: description.trim(),
+          isFromInvoice: false,
+          isProvisioned: txType === TransactionType.provisioned,
+          installment: undefined,
+          currentInstallment: undefined,
+          transactionType: txType,
+        });
+
+        if (selectedAccount?.accountId && selectedAccount?.bankId) {
+          AccountService.addTransactionToAccount(
+            selectedAccount.accountId,
+            selectedAccount.bankId,
+            newTx
+          );
+        }
+
+        await addTransaction(newTx, selectedAccount.accountId, selectedAccount.bankId);
+        toast.success('İşlem eklendi');
+      }
+
+      onClose();
+    } catch (err) {
+      console.error(err);
+      toast.error('İşlem eklenemedi');
+    } finally {
+      setIsSubmitting(false);
     }
-
-    await addTransaction(newTx, selectedAccount.accountId, selectedAccount.bankId);
-    toast.success('İşlem eklendi');
-    onClose();
   };
 
+  // Preview calculations
+  const installmentCount = parseInt(installments) || 1;
+  const parsedAmount = parseFloat(amount.replace(',', '.')) || 0;
+  const installmentAmount = installmentCount > 1 ? parsedAmount / installmentCount : parsedAmount;
+
+  // Build date preview for installments
+  const installmentDates: string[] = [];
+  if (txType === TransactionType.installment && date && installmentCount > 1) {
+    const firstDate = parseLocalDate(date);
+    for (let i = 0; i < Math.min(installmentCount, 6); i++) {
+      const d = new Date(
+        firstDate.getFullYear(),
+        firstDate.getMonth() + i,
+        firstDate.getDate(),
+        12, 0, 0
+      );
+      installmentDates.push(
+        `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`
+      );
+    }
+  }
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4"
+      onClick={onClose}
+    >
       <div
         className="bg-white dark:bg-gray-900 rounded-2xl p-6 w-full max-w-lg max-h-[90vh] overflow-y-auto space-y-4 shadow-2xl"
         onClick={(e) => e.stopPropagation()}
@@ -121,7 +220,7 @@ export function AddTransactionModal({
               ? 'bg-purple-50 dark:bg-purple-900/20 text-purple-600'
               : 'bg-green-50 dark:bg-green-900/20 text-green-600'
           )}>
-            {isCreditCard ? <CreditCard size={14} /> : <CreditCard size={14} />}
+            <CreditCard size={14} />
             {selectedAccount.bankName} — {selectedAccount.name}
             <span className="ml-auto px-2 py-0.5 rounded-md bg-white/50 dark:bg-gray-800/50">
               {isCreditCard ? 'Kredi Kartı' : 'Banka'}
@@ -129,7 +228,7 @@ export function AddTransactionModal({
           </div>
         )}
 
-        {/* Transaction Type Selector */}
+        {/* Transaction Type */}
         <div>
           <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2">İşlem Tipi</p>
           <div className="flex gap-2">
@@ -152,8 +251,6 @@ export function AddTransactionModal({
               </button>
             ))}
           </div>
-
-          {/* Info text for bank accounts */}
           {!isCreditCard && (
             <p className="text-[10px] text-gray-400 mt-2 italic">
               💡 Taksit ve provizyon seçenekleri sadece kredi kartları için geçerlidir.
@@ -166,21 +263,13 @@ export function AddTransactionModal({
           <p className="text-sm font-semibold text-gray-900 dark:text-white">Gelir mi?</p>
           <button
             onClick={() => setIsSurplus(!isSurplus)}
-            className={cn(
-              'w-12 h-6 rounded-full transition-colors',
-              isSurplus ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600'
-            )}
+            className={cn('w-12 h-6 rounded-full transition-colors', isSurplus ? 'bg-green-500' : 'bg-gray-300 dark:bg-gray-600')}
           >
-            <div
-              className={cn(
-                'w-5 h-5 bg-white rounded-full shadow transition-transform mx-0.5',
-                isSurplus ? 'translate-x-6' : 'translate-x-0'
-              )}
-            />
+            <div className={cn('w-5 h-5 bg-white rounded-full shadow transition-transform mx-0.5', isSurplus ? 'translate-x-6' : 'translate-x-0')} />
           </button>
         </div>
 
-        {/* Form Fields - Grid layout for desktop */}
+        {/* Form Fields */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
           <div className="md:col-span-2">
             <FieldLabel>Başlık *</FieldLabel>
@@ -214,9 +303,7 @@ export function AddTransactionModal({
 
           <div>
             <FieldLabel>
-              {txType === TransactionType.installment
-                ? 'Toplam Tutar *'
-                : 'Miktar *'}
+              {txType === TransactionType.installment ? 'Toplam Tutar *' : 'Miktar *'}
             </FieldLabel>
             <input
               type="number"
@@ -240,12 +327,13 @@ export function AddTransactionModal({
             </select>
           </div>
 
-          {/* Installment count — only for credit card + installment type */}
           {txType === TransactionType.installment && isCreditCard && (
             <div>
               <FieldLabel>Taksit Sayısı</FieldLabel>
               <input
                 type="number"
+                min="2"
+                max="60"
                 value={installments}
                 onChange={(e) => setInstallments(e.target.value)}
                 placeholder="Örn: 12"
@@ -255,7 +343,11 @@ export function AddTransactionModal({
           )}
 
           <div>
-            <FieldLabel>Tarih</FieldLabel>
+            <FieldLabel>
+              {txType === TransactionType.installment
+                ? 'İlk Taksit Tarihi'
+                : 'Tarih'}
+            </FieldLabel>
             <input
               type="date"
               value={date}
@@ -275,16 +367,42 @@ export function AddTransactionModal({
           </div>
         </div>
 
-        {/* Amount preview for installments */}
-        {txType === TransactionType.installment && amount && installments && (
-          <div className="bg-purple-50 dark:bg-purple-900/10 rounded-xl p-3 text-sm">
-            <p className="text-purple-600 font-semibold">
-              Taksit: {parseInt(installments) || 1}x{' '}
-              {((parseFloat(amount) || 0) / (parseInt(installments) || 1)).toFixed(2)} ₺
-            </p>
-            <p className="text-purple-400 text-xs">
-              Toplam: {parseFloat(amount).toFixed(2)} ₺
-            </p>
+        {/* Installment preview — shows amounts AND dates */}
+        {txType === TransactionType.installment && parsedAmount > 0 && installmentCount > 1 && (
+          <div className="bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-800 rounded-xl p-4 space-y-3">
+            <div className="flex items-center justify-between">
+              <p className="text-sm font-bold text-purple-700 dark:text-purple-400">
+                Taksit Planı
+              </p>
+              <p className="text-xs text-purple-500">
+                {installmentCount}x {installmentAmount.toFixed(2)} {currency}
+              </p>
+            </div>
+
+            <div className="text-xs text-purple-500 font-medium">
+              Toplam: {parsedAmount.toFixed(2)} {currency}
+            </div>
+
+            {/* Date schedule preview (up to 6 installments) */}
+            {installmentDates.length > 0 && (
+              <div className="space-y-1">
+                {installmentDates.map((d, i) => (
+                  <div key={i} className="flex items-center justify-between text-xs">
+                    <span className="text-purple-600 dark:text-purple-400 font-medium">
+                      {i + 1}/{installmentCount} · {d}
+                    </span>
+                    <span className="font-bold text-purple-700 dark:text-purple-300">
+                      {installmentAmount.toFixed(2)} {currency}
+                    </span>
+                  </div>
+                ))}
+                {installmentCount > 6 && (
+                  <p className="text-[10px] text-purple-400 italic">
+                    … ve {installmentCount - 6} taksit daha
+                  </p>
+                )}
+              </div>
+            )}
           </div>
         )}
 
@@ -292,20 +410,23 @@ export function AddTransactionModal({
         <div className="flex gap-3 pt-2">
           <button
             onClick={onClose}
-            className="flex-1 py-3 border border-gray-200 dark:border-gray-700 rounded-xl text-sm font-semibold text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+            disabled={isSubmitting}
+            className="flex-1 py-3 border border-gray-200 dark:border-gray-700 rounded-xl text-sm font-semibold text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors disabled:opacity-50"
           >
             İptal
           </button>
           <button
             onClick={handleSubmit}
-            className="flex-1 py-3 bg-blue-500 hover:bg-blue-600 text-white rounded-xl text-sm font-semibold transition-colors"
+            disabled={isSubmitting}
+            className="flex-1 py-3 bg-blue-500 hover:bg-blue-600 text-white rounded-xl text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            Kaydet
+            {isSubmitting
+              ? (txType === TransactionType.installment ? 'Taksitler ekleniyor…' : 'Kaydediliyor…')
+              : 'Kaydet'}
           </button>
         </div>
       </div>
 
-      {/* Scoped styles for field inputs */}
       <style jsx>{`
         .field-input {
           width: 100%;

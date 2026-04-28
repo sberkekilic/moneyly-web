@@ -147,30 +147,53 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
       const isExpense = !cleanedTx.isSurplus;
 
       const updatedBanks = bankDataList.map((bank: any) => {
-        if (bank.bankId === bankId) {
-          return {
-            ...bank,
-            accounts: bank.accounts.map((acc: any) => {
-              if (acc.accountId === accountId) {
-                const updated = { ...acc, transactions: [...acc.transactions, cleanedTx] };
-                
-                // Update credit card debts
-                if (!acc.isDebit && isExpense) {
-  return updateAccountDebts(updated, cleanedTx.amount, true);
-}
-                
-                return updated;
-              }
-              return acc;
-            }),
-          };
-        }
-        return bank;
+        if (bank.bankId !== bankId) return bank;
+        return {
+          ...bank,
+          accounts: bank.accounts.map((acc: any) => {
+            if (acc.accountId !== accountId) return acc;
+
+            const updated = {
+              ...acc,
+              transactions: [...(acc.transactions ?? []), cleanedTx],
+            };
+
+            // Recalculate ALL debts from scratch (avoids drift)
+            if (acc.isDebit === false && isExpense) {
+              const expenseTotal = updated.transactions
+                .filter((t: any) => !t.isSurplus)
+                .reduce((s: number, t: any) => s + (t.amount ?? 0), 0);
+
+              const creditLimit = acc.creditLimit ?? 0;
+              return {
+                ...updated,
+                totalDebt: expenseTotal,
+                currentDebt: expenseTotal,
+                remainingDebt: expenseTotal,
+                availableCredit: Math.max(creditLimit - expenseTotal, 0),
+                minPayment: Math.max(expenseTotal * 0.3, 0),
+                remainingMinPayment: Math.max(expenseTotal * 0.3, 0),
+              };
+            }
+
+            return updated;
+          }),
+        };
       });
 
       const allTransactions = [...transactions, cleanedTx];
-      await FirestoreService.saveAllData(user.uid, { bankData: updatedBanks, transactions: allTransactions });
-      set({ bankDataList: updatedBanks, transactions: allTransactions, filteredTransactions: allTransactions, isLoading: false });
+
+      await FirestoreService.saveAllData(user.uid, {
+        bankData: updatedBanks,
+        transactions: allTransactions,
+      });
+
+      set({
+        bankDataList: updatedBanks,
+        transactions: allTransactions,
+        filteredTransactions: allTransactions,
+        isLoading: false,
+      });
     } catch (e) {
       set({ error: 'İşlem eklenemedi', isLoading: false });
       throw e;
