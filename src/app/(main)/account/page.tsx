@@ -12,6 +12,7 @@ import toast from 'react-hot-toast';
 import Link from 'next/link';
 import { AuthGuard } from '@/components/AuthGuard';
 import { useSettingsStore } from '@/store/settingsStore';
+import { calculateCreditCardCycle } from '@/lib/creditCard';
 
 // ── Date helpers ──────────────────────────────────────────
 
@@ -411,27 +412,34 @@ function AccountCard({
                 ))}
               </div>
 
-              {/* Period info — computed live from cutoffDay */}
-              <div className="grid grid-cols-3 gap-2">
-                <div className="bg-gray-50 dark:bg-gray-700 rounded-xl p-2">
-                  <p className="text-[10px] text-gray-400">Kesim Günü</p>
-                  <p className="text-xs font-semibold text-gray-900 dark:text-white">
-                    Her ayın {cutoffDay}'i
-                  </p>
-                </div>
-                <div className="bg-blue-50 dark:bg-blue-900/10 rounded-xl p-2">
-                  <p className="text-[10px] text-gray-400">Son Kesim</p>
-                  <p className="text-xs font-semibold text-blue-700 dark:text-blue-300">
-                    {formatDateTR(nextCutoff)}
-                  </p>
-                </div>
-                <div className="bg-orange-50 dark:bg-orange-900/10 rounded-xl p-2">
-                  <p className="text-[10px] text-gray-400">Son Ödeme</p>
-                  <p className="text-xs font-semibold text-orange-700 dark:text-orange-300">
-                    {formatDateTR(dueDate)}
-                  </p>
-                </div>
-              </div>
+              {/* Period info — using shared cycle calculator */}
+              {(() => {
+                const cycle = calculateCreditCardCycle(cutoffDay);
+                return (
+                  <div className="grid grid-cols-2 gap-2">
+                    <div className="bg-blue-50 dark:bg-blue-900/10 rounded-xl p-2">
+                      <p className="text-[10px] text-gray-400">
+                        {acc.previousDebt > 0 ? 'Ekstre Son Ödeme' : 'Sonraki Son Ödeme'}
+                      </p>
+                      <p className="text-xs font-semibold text-blue-700 dark:text-blue-300">
+                        {formatDateTR(cycle.statementDueDate)}
+                      </p>
+                      <p className="text-[10px] text-gray-400 mt-0.5">
+                        Kesim: Her ayın {cutoffDay}'i
+                      </p>
+                    </div>
+                    <div className="bg-gray-50 dark:bg-gray-700 rounded-xl p-2">
+                      <p className="text-[10px] text-gray-400">Sonraki Kesim</p>
+                      <p className="text-xs font-semibold text-gray-900 dark:text-white">
+                        {formatDateTR(cycle.nextCutoffDate)}
+                      </p>
+                      <p className="text-[10px] text-gray-400 mt-0.5">
+                        Son Ödeme: {formatDateTR(cycle.nextDueDate)}
+                      </p>
+                    </div>
+                  </div>
+                );
+              })()}
 
               {/* Debt breakdown */}
               {(acc.previousDebt > 0 || acc.remainingDebt > 0) && (

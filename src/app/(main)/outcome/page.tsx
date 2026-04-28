@@ -8,7 +8,7 @@ import { useSettingsStore } from '@/store/settingsStore';
 import { Transaction } from '@/models/transaction';
 import { formatAmount, formatDateShort } from '@/lib/formatters';
 import {
-  TrendingDown, Folder, Tag, Trash2, Plus,
+  TrendingDown, Folder, Tag, Trash2, Plus, CheckCircle2,
   ArrowDownRight, Calendar, Shield, Receipt,
   Inbox, ArrowLeft, Wallet, BarChart3, ChevronRight, Pencil, RefreshCw
 } from 'lucide-react';
@@ -461,6 +461,9 @@ export default function OutcomePage() {
               grouped={grouped}
               onDelete={handleDelete}
               onEdit={handleEdit}
+              accountId={selectedAccount?.accountId}
+              bankId={selectedAccount?.bankId}
+              isCreditCard={isCreditCard}
               t={t}
             />
           </>
@@ -578,11 +581,17 @@ function TransactionGroups({
   grouped,
   onDelete,
   onEdit,
+  accountId,
+  bankId,
+  isCreditCard,
   t,
 }: {
   grouped: Record<string, Record<string, Transaction[]>>;
   onDelete: (tx: Transaction) => void;
   onEdit: (tx: Transaction) => void;
+  accountId?: number;
+  bankId?: number;
+  isCreditCard?: boolean;
   t: any;
 }) {
   const categoryKeys = Object.keys(grouped);
@@ -687,7 +696,15 @@ function TransactionGroups({
                     {isSubOpen && txs
                       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
                       .map((tx) => (
-                        <TransactionTile key={tx.transactionId} tx={tx} onDelete={onDelete} onEdit={onEdit} />
+                        <TransactionTile
+                          key={tx.transactionId}
+                          tx={tx}
+                          onDelete={onDelete}
+                          onEdit={onEdit}
+                          accountId={accountId}
+                          bankId={bankId}
+                          isCreditCard={isCreditCard}
+                        />
                       ))}
                   </div>
                 );
@@ -704,27 +721,78 @@ function TransactionTile({
   tx,
   onDelete,
   onEdit,
+  accountId,
+  bankId,
+  isCreditCard,
 }: {
   tx: Transaction;
   onDelete: (tx: Transaction) => void;
   onEdit: (tx: Transaction) => void;
+  accountId?: number;
+  bankId?: number;
+  isCreditCard?: boolean;
 }) {
+  const { payInstallment } = useTransactionStore();
+  const [isPaying, setIsPaying] = useState(false);
+
+  const canPay = isCreditCard && !tx.isSurplus && !tx.isInstallmentPaid && accountId && bankId;
+  const isPaid = tx.isInstallmentPaid;
+
+  const handlePay = async () => {
+    if (!accountId || !bankId) return;
+    try {
+      setIsPaying(true);
+      await payInstallment(accountId, bankId, tx.transactionId, tx.amount);
+      toast.success('Ödeme kaydedildi');
+    } catch {
+      toast.error('Ödeme kaydedilemedi');
+    } finally {
+      setIsPaying(false);
+    }
+  };
+
   return (
-    <div className="flex items-center gap-3 px-4 py-3 border-t border-gray-50 dark:border-gray-700/50 bg-gray-50/50 dark:bg-gray-700/20 hover:bg-gray-100/50 dark:hover:bg-gray-600/20 transition-colors group">
-      <div className="w-8 h-8 rounded-full bg-red-50 dark:bg-red-900/20 flex items-center justify-center flex-shrink-0">
-        <ArrowDownRight size={14} className="text-red-500" />
+    <div className={cn(
+      'flex items-center gap-3 px-4 py-3 border-t border-gray-50 dark:border-gray-700/50 hover:bg-gray-100/50 dark:hover:bg-gray-600/20 transition-colors group',
+      isPaid
+        ? 'bg-green-50/50 dark:bg-green-900/10'
+        : 'bg-gray-50/50 dark:bg-gray-700/20'
+    )}>
+      <div className={cn(
+        'w-8 h-8 rounded-full flex items-center justify-center flex-shrink-0',
+        isPaid
+          ? 'bg-green-100 dark:bg-green-900/30'
+          : 'bg-red-50 dark:bg-red-900/20'
+      )}>
+        {isPaid
+          ? <CheckCircle2 size={14} className="text-green-500" />
+          : <ArrowDownRight size={14} className="text-red-500" />
+        }
       </div>
 
       <div className="flex-1 min-w-0">
-        <p className="text-xs font-semibold text-gray-900 dark:text-white truncate">{tx.title}</p>
+        <p className={cn(
+          'text-xs font-semibold truncate',
+          isPaid
+            ? 'text-green-700 dark:text-green-400 line-through'
+            : 'text-gray-900 dark:text-white'
+        )}>
+          {tx.title}
+        </p>
         <div className="flex items-center gap-2 flex-wrap mt-0.5">
           <span className="flex items-center gap-1">
             <Calendar size={10} className="text-gray-400" />
             <span className="text-[10px] text-gray-400">{formatDateShort(tx.date)}</span>
           </span>
           {tx.installment && tx.installment > 1 && (
-            <span className="text-[10px] font-semibold text-blue-500 bg-blue-50 dark:bg-blue-900/20 px-1.5 py-0.5 rounded">
+            <span className={cn(
+              'text-[10px] font-semibold px-1.5 py-0.5 rounded',
+              isPaid
+                ? 'text-green-600 bg-green-50 dark:bg-green-900/20'
+                : 'text-blue-500 bg-blue-50 dark:bg-blue-900/20'
+            )}>
               {tx.currentInstallment ?? 1}/{tx.installment}
+              {isPaid && ' ✓'}
             </span>
           )}
           {tx.isProvisioned && (
@@ -733,14 +801,39 @@ function TransactionTile({
               <span className="hidden sm:inline">Provizyon</span>
             </span>
           )}
+          {isPaid && (
+            <span className="text-[10px] font-semibold text-green-600 bg-green-50 dark:bg-green-900/20 px-1.5 py-0.5 rounded">
+              Ödendi
+            </span>
+          )}
         </div>
       </div>
 
-      <p className="text-sm font-bold text-red-500 flex-shrink-0 tabular-nums">
+      <p className={cn(
+        'text-sm font-bold flex-shrink-0 tabular-nums',
+        isPaid ? 'text-green-600 line-through' : 'text-red-500'
+      )}>
         {formatAmount(tx.amount)} {getCurrencySymbol(tx.currency || 'TRY')}
       </p>
 
       <div className="flex items-center gap-1 flex-shrink-0">
+        {/* Pay button — only for unpaid credit card expenses */}
+        {canPay && (
+          <button
+            onClick={handlePay}
+            disabled={isPaying}
+            className={cn(
+              'px-2 py-1 rounded-lg text-[10px] font-semibold transition-colors',
+              isPaying
+                ? 'bg-gray-100 text-gray-400'
+                : 'bg-green-50 dark:bg-green-900/20 text-green-600 hover:bg-green-100 dark:hover:bg-green-900/30'
+            )}
+            title="Öde"
+          >
+            {isPaying ? '...' : 'Öde'}
+          </button>
+        )}
+
         <button
           onClick={() => onEdit(tx)}
           className="p-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-gray-400 hover:text-blue-500 transition-colors opacity-100 md:opacity-0 md:group-hover:opacity-100"

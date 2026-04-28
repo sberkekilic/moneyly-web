@@ -1,3 +1,4 @@
+// src/components/home/DebtPaymentTracker.tsx
 'use client';
 
 import { useMemo, useState } from 'react';
@@ -12,7 +13,6 @@ import { cn } from '@/lib/utils';
 import toast from 'react-hot-toast';
 import {
   calculateCreditCardCycle,
-  parseLocalDateInput,
   toDateInputValue,
 } from '@/lib/creditCard';
 
@@ -41,8 +41,8 @@ interface CreditAccountInfo {
   nextCutoffDate: Date;
   nextDueDate: Date;
   phase: DebtPhase;
-  daysUntilCutoff: number;
   daysUntilDue: number;
+  daysUntilNextCutoff: number;
   transactions: any[];
 }
 
@@ -52,19 +52,38 @@ function daysBetween(a: Date, b: Date): number {
 }
 
 function sameDay(a: Date, b: Date) {
-  return a.getFullYear() === b.getFullYear()
-    && a.getMonth() === b.getMonth()
-    && a.getDate() === b.getDate();
+  return (
+    a.getFullYear() === b.getFullYear() &&
+    a.getMonth() === b.getMonth() &&
+    a.getDate() === b.getDate()
+  );
 }
 
-function getPhase(now: Date, account: Pick<CreditAccountInfo, 'previousDebt' | 'statementCutoffDate' | 'statementDueDate' | 'daysUntilCutoff'>): DebtPhase {
-  if (account.previousDebt > 0) {
-    if (now > account.statementDueDate) return 'overdue';
-    if (sameDay(now, account.statementDueDate)) return 'due_today';
-    if (now >= account.statementCutoffDate && now < account.statementDueDate) return 'pay_period';
+/**
+ * Phase is determined by:
+ * 1. Is there unpaid previous statement debt (previousDebt > 0)?
+ * 2. Where are we relative to statementDueDate?
+ *
+ * If previousDebt === 0 → always 'safe' (nothing to pay)
+ * If previousDebt > 0:
+ *   - past due date → overdue
+ *   - today is due date → due_today
+ *   - between cutoff and due → pay_period
+ *   - within 7 days of cutoff → approaching
+ *   - else → safe
+ */
+function getPhase(now: Date, acc: { previousDebt: number; statementCutoffDate: Date; statementDueDate: Date; daysUntilNextCutoff: number }): DebtPhase {
+  // No statement debt → nothing to worry about
+  if (acc.previousDebt <= 0) {
+    if (acc.daysUntilNextCutoff <= 7 && acc.daysUntilNextCutoff > 0) return 'approaching';
+    return 'safe';
   }
 
-  if (account.daysUntilCutoff <= 7 && account.daysUntilCutoff > 0) return 'approaching';
+  // Has statement debt — check urgency
+  if (now > acc.statementDueDate && !sameDay(now, acc.statementDueDate)) return 'overdue';
+  if (sameDay(now, acc.statementDueDate)) return 'due_today';
+  if (now >= acc.statementCutoffDate) return 'pay_period';
+
   return 'safe';
 }
 
@@ -81,7 +100,7 @@ const PHASE_CONFIG: Record<DebtPhase, {
 }> = {
   safe: {
     label:       { tr: 'Güvenli', en: 'Safe' },
-    description: { tr: 'Ödeme günü uzak', en: 'Payment day is far' },
+    description: { tr: 'Ödeme günü uzak veya borç yok', en: 'No debt or payment day is far' },
     bgColor:     'bg-green-50 dark:bg-green-900/10',
     borderColor: 'border-green-200 dark:border-green-800',
     textColor:   'text-green-700 dark:text-green-400',
@@ -103,7 +122,7 @@ const PHASE_CONFIG: Record<DebtPhase, {
   },
   pay_period: {
     label:       { tr: 'Ödeme Dönemi', en: 'Payment Period' },
-    description: { tr: 'Ekstre ödemesi açık', en: 'Statement payment is open' },
+    description: { tr: 'Ekstre borcunu ödeyin', en: 'Pay your statement' },
     bgColor:     'bg-orange-50 dark:bg-orange-900/10',
     borderColor: 'border-orange-300 dark:border-orange-700',
     textColor:   'text-orange-700 dark:text-orange-400',
@@ -125,7 +144,7 @@ const PHASE_CONFIG: Record<DebtPhase, {
   },
   overdue: {
     label:       { tr: 'GECİKMİŞ!', en: 'OVERDUE!' },
-    description: { tr: 'Ekstre son ödeme tarihi geçti', en: 'Statement due date passed' },
+    description: { tr: 'Son ödeme tarihi geçti!', en: 'Due date passed!' },
     bgColor:     'bg-red-100 dark:bg-red-900/20',
     borderColor: 'border-red-500 dark:border-red-600',
     textColor:   'text-red-800 dark:text-red-300',
@@ -153,7 +172,8 @@ export function DebtPaymentTracker({
     totalDebt:     lang === 'tr' ? 'Toplam Borç' : 'Total Debt',
     minPayment:    lang === 'tr' ? 'Asgari Ödeme' : 'Min. Payment',
     available:     lang === 'tr' ? 'Kullanılabilir' : 'Available',
-    statement:     lang === 'tr' ? 'Ekstre' : 'Statement',
+    statement:     lang === 'tr' ? 'Ekstre Borcu' : 'Statement Debt',
+    currentPeriod: lang === 'tr' ? 'Dönem Borcu' : 'Current Period',
     dueDate:       lang === 'tr' ? 'Son Ödeme' : 'Due Date',
     nextCutoff:    lang === 'tr' ? 'Sonraki Kesim' : 'Next Cutoff',
     daysLeft:      lang === 'tr' ? 'gün kaldı' : 'days left',
@@ -165,11 +185,12 @@ export function DebtPaymentTracker({
     payMin:        lang === 'tr' ? 'Asgariyi Öde' : 'Pay Min',
     payStatement:  lang === 'tr' ? 'Ekstreyi Öde' : 'Pay Statement',
     payAll:        lang === 'tr' ? 'Tümünü Öde' : 'Pay All',
-    custom:        lang === 'tr' ? 'Özel' : 'Custom',
+    custom:        lang === 'tr' ? 'Özel Tutar' : 'Custom',
+    noPrevDebt:    lang === 'tr' ? 'Ekstre borcu yok' : 'No statement debt',
   };
 
   const creditAccounts: CreditAccountInfo[] = useMemo(() => {
-    const now = parseLocalDateInput(new Date());
+    const now = new Date();
     const accounts: CreditAccountInfo[] = [];
 
     bankDataList.forEach((bank: any) => {
@@ -177,8 +198,8 @@ export function DebtPaymentTracker({
         if (acc.isDebit !== false) return;
 
         const cycle = calculateCreditCardCycle(acc.cutoffDate || 1, now);
-        const daysUntilCutoff = daysBetween(now, cycle.nextCutoffDate);
         const daysUntilDue = daysBetween(now, cycle.statementDueDate);
+        const daysUntilNextCutoff = daysBetween(now, cycle.nextCutoffDate);
 
         const temp: CreditAccountInfo = {
           accountId: acc.accountId,
@@ -197,8 +218,8 @@ export function DebtPaymentTracker({
           nextCutoffDate: cycle.nextCutoffDate,
           nextDueDate: cycle.nextDueDate,
           phase: 'safe',
-          daysUntilCutoff,
           daysUntilDue,
+          daysUntilNextCutoff,
           transactions: acc.transactions ?? [],
         };
 
@@ -208,14 +229,10 @@ export function DebtPaymentTracker({
     });
 
     const phaseOrder: Record<DebtPhase, number> = {
-      overdue: 0,
-      due_today: 1,
-      pay_period: 2,
-      approaching: 3,
-      safe: 4,
+      overdue: 0, due_today: 1, pay_period: 2, approaching: 3, safe: 4,
     };
-
     accounts.sort((a, b) => phaseOrder[a.phase] - phaseOrder[b.phase]);
+
     return accounts;
   }, [bankDataList]);
 
@@ -229,16 +246,20 @@ export function DebtPaymentTracker({
   const totalMinPayment = creditAccounts.reduce((s, a) => s + a.minPayment, 0);
   const totalAvailable = creditAccounts.reduce((s, a) => s + a.availableCredit, 0);
 
-  const handlePay = async (account: CreditAccountInfo, amount: number, date?: string, note?: string) => {
+  const handlePay = async (
+    account: CreditAccountInfo,
+    amount: number,
+    date?: string,
+    note?: string
+  ) => {
     if (!amount || amount <= 0) return;
-
     try {
       setIsPaying(true);
       await payCreditCardDebt(account.accountId, account.bankId, amount, date, note);
       toast.success(lang === 'tr' ? 'Borç ödemesi kaydedildi' : 'Debt payment saved');
       setCustomAccount(null);
     } catch {
-      toast.error(lang === 'tr' ? 'Borç ödemesi kaydedilemedi' : 'Failed to save payment');
+      toast.error(lang === 'tr' ? 'Borç ödemesi kaydedilemedi' : 'Failed to save');
     } finally {
       setIsPaying(false);
     }
@@ -311,6 +332,8 @@ function UrgentBanner({ accounts, lang }: { accounts: CreditAccountInfo[]; lang:
   const urgent = accounts.filter(
     (a) => a.phase === 'overdue' || a.phase === 'due_today' || a.phase === 'pay_period'
   );
+  if (urgent.length === 0) return null;
+
   const mostUrgent = urgent[0];
   const config = PHASE_CONFIG[mostUrgent.phase];
 
@@ -331,7 +354,7 @@ function UrgentBanner({ accounts, lang }: { accounts: CreditAccountInfo[]; lang:
                 key={acc.accountId}
                 className={cn('text-[10px] font-semibold px-2 py-0.5 rounded-lg', config.badgeColor)}
               >
-                {acc.bankName} — {formatAmount(acc.previousDebt || acc.totalDebt)}₺
+                {acc.bankName} — {formatAmount(acc.previousDebt)}₺ ekstre
               </span>
             ))}
           </div>
@@ -343,13 +366,8 @@ function UrgentBanner({ accounts, lang }: { accounts: CreditAccountInfo[]; lang:
 }
 
 function CreditCardRow({
-  account,
-  lang,
-  t,
-  onPayMin,
-  onPayStatement,
-  onPayAll,
-  onCustom,
+  account, lang, t,
+  onPayMin, onPayStatement, onPayAll, onCustom,
 }: {
   account: CreditAccountInfo;
   lang: string;
@@ -362,31 +380,26 @@ function CreditCardRow({
   const config = PHASE_CONFIG[account.phase];
 
   const formatD = (d: Date) =>
-    `${d.getDate().toString().padStart(2, '0')}/${(d.getMonth() + 1).toString().padStart(2, '0')}`;
+    `${d.getDate().toString().padStart(2, '0')}.${(d.getMonth() + 1).toString().padStart(2, '0')}.${d.getFullYear()}`;
 
   const dueDisplay = (() => {
+    if (account.previousDebt <= 0) return lang === 'tr' ? 'Borç yok' : 'No debt';
     if (account.daysUntilDue === 0) return lang === 'tr' ? 'Bugün!' : 'Today!';
     if (account.daysUntilDue < 0) return `${Math.abs(account.daysUntilDue)} ${lang === 'tr' ? 'gün geçti' : 'days ago'}`;
-    return `${account.daysUntilDue} ${lang === 'tr' ? 'gün kaldı' : 'days left'}`;
+    return `${account.daysUntilDue} ${t.daysLeft}`;
   })();
 
-  const cutoffDisplay = (() => {
-    if (account.daysUntilCutoff === 0) return lang === 'tr' ? 'Bugün!' : 'Today!';
-    if (account.daysUntilCutoff < 0) return `${Math.abs(account.daysUntilCutoff)} ${lang === 'tr' ? 'gün geçti' : 'days ago'}`;
-    return `${account.daysUntilCutoff} ${lang === 'tr' ? 'gün kaldı' : 'days left'}`;
+  const nextCutoffDisplay = (() => {
+    if (account.daysUntilNextCutoff === 0) return lang === 'tr' ? 'Bugün!' : 'Today!';
+    return `${account.daysUntilNextCutoff} ${t.daysLeft}`;
   })();
 
-  const usagePercent = account.creditLimit > 0
-    ? (account.totalDebt / account.creditLimit) * 100
-    : 0;
-
-  const usageColor =
-    usagePercent >= 80 ? 'bg-red-500' :
-    usagePercent >= 50 ? 'bg-orange-500' :
-    'bg-green-500';
+  const usagePercent = account.creditLimit > 0 ? (account.totalDebt / account.creditLimit) * 100 : 0;
+  const usageColor = usagePercent >= 80 ? 'bg-red-500' : usagePercent >= 50 ? 'bg-orange-500' : 'bg-green-500';
 
   return (
     <div className="p-5 hover:bg-gray-50/50 dark:hover:bg-gray-700/20 transition-colors">
+      {/* Header */}
       <div className="flex items-start justify-between mb-3">
         <div className="flex items-center gap-3">
           <div className={cn('w-10 h-10 rounded-xl flex items-center justify-center', config.bgColor)}>
@@ -397,13 +410,13 @@ function CreditCardRow({
             <p className="text-xs text-gray-500 dark:text-gray-400">{account.accountName}</p>
           </div>
         </div>
-
-        <div className={cn('flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold', config.badgeColor)}>
+        <div className={cn('flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-bold', config.badgeColor, config.pulse && 'animate-pulse')}>
           <span className={config.iconColor}>{config.icon}</span>
           {config.label[lang as 'tr' | 'en']}
         </div>
       </div>
 
+      {/* Usage bar */}
       <div className="mb-3">
         <div className="flex items-center justify-between text-xs mb-1">
           <span className="text-gray-500">{t.limit}: {formatAmount(account.creditLimit)}₺</span>
@@ -419,82 +432,82 @@ function CreditCardRow({
         </div>
       </div>
 
+      {/* Debt info grid */}
       <div className="grid grid-cols-2 md:grid-cols-4 gap-2 mb-3">
-        <InfoCell label={t.statement} value={`${formatAmount(account.previousDebt)}₺`} highlight={account.previousDebt > 0} />
-        <InfoCell label={t.debt} value={`${formatAmount(account.totalDebt)}₺`} highlight={account.totalDebt > 0} />
-        <InfoCell label={t.minPay} value={`${formatAmount(account.minPayment)}₺`} />
-        <InfoCell label={t.available} value={`${formatAmount(account.availableCredit)}₺`} />
+        <InfoCell
+          label={t.statement}
+          value={`${formatAmount(account.previousDebt)}₺`}
+          highlight={account.previousDebt > 0}
+        />
+        <InfoCell
+          label={t.currentPeriod}
+          value={`${formatAmount(account.remainingDebt)}₺`}
+        />
+        <InfoCell
+          label={t.debt}
+          value={`${formatAmount(account.totalDebt)}₺`}
+          highlight={account.totalDebt > 0}
+        />
+        <InfoCell
+          label={t.available}
+          value={`${formatAmount(account.availableCredit)}₺`}
+        />
       </div>
 
+      {/* Date timeline */}
       <div className="grid grid-cols-2 gap-2 mb-3">
         <DateCell
-          label={lang === 'tr' ? 'Ekstre Kesim' : 'Statement Cutoff'}
-          date={formatD(account.statementCutoffDate)}
-          daysText={cutoffDisplay}
-          phase="approaching"
-          lang={lang}
-        />
-        <DateCell
-          label={t.dueDate}
+          label={account.previousDebt > 0
+            ? (lang === 'tr' ? 'Ekstre Son Ödeme' : 'Statement Due')
+            : t.dueDate}
           date={formatD(account.statementDueDate)}
           daysText={dueDisplay}
           phase={account.phase}
           lang={lang}
-          isUrgent={account.phase === 'pay_period' || account.phase === 'due_today' || account.phase === 'overdue'}
+          isUrgent={account.previousDebt > 0 && (account.phase === 'pay_period' || account.phase === 'due_today' || account.phase === 'overdue')}
+        />
+        <DateCell
+          label={t.nextCutoff}
+          date={formatD(account.nextCutoffDate)}
+          daysText={nextCutoffDisplay}
+          phase={account.daysUntilNextCutoff <= 3 ? 'approaching' : 'safe'}
+          lang={lang}
         />
       </div>
 
-      <div className="text-[10px] text-gray-400 mb-3">
-        {t.nextCutoff}: {toDateInputValue(account.nextCutoffDate)}
-      </div>
-
+      {/* Payment buttons — only show when there's debt */}
       {account.totalDebt > 0 && (
         <div className="flex flex-wrap gap-2">
           {account.minPayment > 0 && (
-            <button
-              onClick={onPayMin}
-              className="px-3 py-1.5 rounded-lg bg-orange-50 dark:bg-orange-900/20 text-orange-600 text-xs font-semibold hover:bg-orange-100"
-            >
-              {t.payMin}
+            <button onClick={onPayMin} className="px-3 py-1.5 rounded-lg bg-orange-50 dark:bg-orange-900/20 text-orange-600 text-xs font-semibold hover:bg-orange-100 dark:hover:bg-orange-900/30 transition-colors">
+              {t.payMin} ({formatAmount(account.minPayment)}₺)
             </button>
           )}
-
           {account.previousDebt > 0 && (
-            <button
-              onClick={onPayStatement}
-              className="px-3 py-1.5 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-600 text-xs font-semibold hover:bg-red-100"
-            >
-              {t.payStatement}
+            <button onClick={onPayStatement} className="px-3 py-1.5 rounded-lg bg-red-50 dark:bg-red-900/20 text-red-600 text-xs font-semibold hover:bg-red-100 dark:hover:bg-red-900/30 transition-colors">
+              {t.payStatement} ({formatAmount(account.previousDebt)}₺)
             </button>
           )}
-
-          {account.totalDebt > 0 && (
-            <button
-              onClick={onPayAll}
-              className="px-3 py-1.5 rounded-lg bg-blue-50 dark:bg-blue-900/20 text-blue-600 text-xs font-semibold hover:bg-blue-100"
-            >
-              {t.payAll}
-            </button>
-          )}
-
-          <button
-            onClick={onCustom}
-            className="px-3 py-1.5 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-700 dark:text-gray-200 text-xs font-semibold hover:bg-gray-100 dark:hover:bg-gray-600"
-          >
+          <button onClick={onPayAll} className="px-3 py-1.5 rounded-lg bg-blue-50 dark:bg-blue-900/20 text-blue-600 text-xs font-semibold hover:bg-blue-100 dark:hover:bg-blue-900/30 transition-colors">
+            {t.payAll} ({formatAmount(account.totalDebt)}₺)
+          </button>
+          <button onClick={onCustom} className="px-3 py-1.5 rounded-lg bg-gray-50 dark:bg-gray-700 text-gray-700 dark:text-gray-200 text-xs font-semibold hover:bg-gray-100 dark:hover:bg-gray-600 transition-colors">
             {t.custom}
           </button>
         </div>
+      )}
+
+      {account.totalDebt === 0 && (
+        <p className="text-xs text-green-600 font-semibold">
+          ✓ {lang === 'tr' ? 'Borç yok' : 'No debt'}
+        </p>
       )}
     </div>
   );
 }
 
 function DebtPaymentModal({
-  account,
-  lang,
-  isSubmitting,
-  onClose,
-  onSubmit,
+  account, lang, isSubmitting, onClose, onSubmit,
 }: {
   account: CreditAccountInfo;
   lang: string;
@@ -502,76 +515,82 @@ function DebtPaymentModal({
   onClose: () => void;
   onSubmit: (account: CreditAccountInfo, amount: number, date?: string, note?: string) => void;
 }) {
-  const [amount, setAmount] = useState(String(account.previousDebt > 0 ? account.previousDebt : account.totalDebt));
+  const [amount, setAmount] = useState(
+    String(account.previousDebt > 0 ? account.previousDebt : account.totalDebt)
+  );
   const [date, setDate] = useState(toDateInputValue(new Date()));
   const [note, setNote] = useState('');
 
+  const maxPayable = account.totalDebt;
+
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
-      <div
-        className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-md p-5 space-y-4"
-        onClick={(e) => e.stopPropagation()}
-      >
+      <div className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-md p-5 space-y-4" onClick={(e) => e.stopPropagation()}>
         <h3 className="text-lg font-bold text-gray-900 dark:text-white">
           {lang === 'tr' ? 'Borç Ödemesi' : 'Debt Payment'}
         </h3>
 
-        <div>
-          <p className="text-xs text-gray-400 mb-1">{account.bankName} — {account.accountName}</p>
-          <p className="text-sm font-semibold text-gray-900 dark:text-white">
-            {lang === 'tr' ? 'Toplam borç:' : 'Total debt:'} {formatAmount(account.totalDebt)}₺
-          </p>
+        <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-3 space-y-1">
+          <p className="text-xs text-gray-400">{account.bankName} — {account.accountName}</p>
+          <div className="grid grid-cols-2 gap-2">
+            <div>
+              <p className="text-[10px] text-gray-400">{lang === 'tr' ? 'Ekstre Borcu' : 'Statement'}</p>
+              <p className="text-sm font-bold text-red-500">{formatAmount(account.previousDebt)}₺</p>
+            </div>
+            <div>
+              <p className="text-[10px] text-gray-400">{lang === 'tr' ? 'Toplam Borç' : 'Total'}</p>
+              <p className="text-sm font-bold text-gray-900 dark:text-white">{formatAmount(account.totalDebt)}₺</p>
+            </div>
+          </div>
         </div>
 
         <div>
           <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1 block">
-            {lang === 'tr' ? 'Ödeme Tutarı' : 'Payment Amount'}
+            {lang === 'tr' ? 'Ödeme Tutarı' : 'Amount'}
           </label>
           <input
             type="number"
             value={amount}
             onChange={(e) => setAmount(e.target.value)}
-            className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 text-sm"
+            max={maxPayable}
+            className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
           />
+          {Number(amount) > maxPayable && (
+            <p className="text-[10px] text-red-500 mt-1">
+              {lang === 'tr' ? `Maksimum: ${formatAmount(maxPayable)}₺` : `Max: ${formatAmount(maxPayable)}₺`}
+            </p>
+          )}
         </div>
 
         <div>
           <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1 block">
             {lang === 'tr' ? 'Tarih' : 'Date'}
           </label>
-          <input
-            type="date"
-            value={date}
-            onChange={(e) => setDate(e.target.value)}
-            className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 text-sm"
-          />
+          <input type="date" value={date} onChange={(e) => setDate(e.target.value)}
+            className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
         </div>
 
         <div>
           <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1 block">
             {lang === 'tr' ? 'Not' : 'Note'}
           </label>
-          <input
-            value={note}
-            onChange={(e) => setNote(e.target.value)}
-            className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 text-sm"
-            placeholder={lang === 'tr' ? 'Opsiyonel' : 'Optional'}
-          />
+          <input value={note} onChange={(e) => setNote(e.target.value)}
+            className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            placeholder={lang === 'tr' ? 'Opsiyonel' : 'Optional'} />
         </div>
 
         <div className="flex gap-3">
-          <button
-            onClick={onClose}
-            className="flex-1 py-3 border border-gray-200 dark:border-gray-700 rounded-xl text-sm font-semibold"
-          >
+          <button onClick={onClose}
+            className="flex-1 py-3 border border-gray-200 dark:border-gray-700 rounded-xl text-sm font-semibold text-gray-600 dark:text-gray-400">
             {lang === 'tr' ? 'İptal' : 'Cancel'}
           </button>
           <button
-            disabled={isSubmitting}
-            onClick={() => onSubmit(account, Math.min(Number(amount) || 0, account.totalDebt), date, note)}
-            className="flex-1 py-3 bg-blue-500 hover:bg-blue-600 text-white rounded-xl text-sm font-semibold disabled:opacity-50"
-          >
-            {lang === 'tr' ? 'Kaydet' : 'Save'}
+            disabled={isSubmitting || !Number(amount) || Number(amount) <= 0}
+            onClick={() => onSubmit(account, Math.min(Number(amount) || 0, maxPayable), date, note)}
+            className="flex-1 py-3 bg-blue-500 hover:bg-blue-600 text-white rounded-xl text-sm font-semibold disabled:opacity-50 transition-colors">
+            {isSubmitting
+              ? (lang === 'tr' ? 'Kaydediliyor…' : 'Saving…')
+              : (lang === 'tr' ? 'Öde' : 'Pay')}
           </button>
         </div>
       </div>
@@ -585,7 +604,6 @@ function SummaryMini({ label, amount, color }: { label: string; amount: number; 
     orange: 'bg-orange-50 dark:bg-orange-900/10 text-orange-600',
     blue: 'bg-blue-50 dark:bg-blue-900/10 text-blue-600',
   };
-
   return (
     <div className={cn('rounded-xl p-3 text-center', colorMap[color])}>
       <p className="text-[10px] opacity-70 mb-0.5">{label}</p>
@@ -608,23 +626,15 @@ function InfoCell({ label, value, highlight = false }: { label: string; value: s
 function DateCell({
   label, date, daysText, phase, lang, isUrgent = false,
 }: {
-  label: string;
-  date: string;
-  daysText: string;
-  phase: DebtPhase;
-  lang: string;
-  isUrgent?: boolean;
+  label: string; date: string; daysText: string; phase: DebtPhase; lang: string; isUrgent?: boolean;
 }) {
   const config = PHASE_CONFIG[phase];
-
   return (
-    <div
-      className={cn(
-        'rounded-xl p-3 border',
-        isUrgent ? config.bgColor : 'bg-gray-50 dark:bg-gray-700/50',
-        isUrgent ? config.borderColor : 'border-transparent'
-      )}
-    >
+    <div className={cn(
+      'rounded-xl p-3 border',
+      isUrgent ? config.bgColor : 'bg-gray-50 dark:bg-gray-700/50',
+      isUrgent ? config.borderColor : 'border-transparent'
+    )}>
       <p className="text-[10px] text-gray-400">{label}</p>
       <p className={cn('text-sm font-bold mt-1', isUrgent ? config.textColor : 'text-gray-900 dark:text-white')}>
         {date}

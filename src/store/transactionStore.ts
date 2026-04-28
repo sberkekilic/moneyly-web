@@ -1,9 +1,9 @@
 // src/store/transactionStore.ts
 import { create } from 'zustand';
-import { Transaction } from '@/models/transaction';
+import { Transaction, createTransaction, TransactionType } from '@/models/transaction';
 import { FirestoreService } from '@/services/firestoreService';
 import { useAuthStore } from './authStore';
-import { recalculateCreditAccount } from '@/lib/creditCard';
+import { recalculateCreditAccount, toLocalISOString, parseLocalDateInput } from '@/lib/creditCard';
 
 const cleanForFirestore = (tx: Transaction): any => {
   const cleaned: any = {};
@@ -21,15 +21,36 @@ interface TransactionState {
   error: string | null;
 
   loadAllData: () => Promise<void>;
-  addTransaction: (transaction: Transaction, accountId: number, bankId: number) => Promise<void>;
-  deleteTransaction: (accountId: number, bankId: number, transactionId: number, deleteAllInstallments?: boolean) => Promise<void>;
-  updateTransaction: (transaction: Transaction, accountId: number, bankId: number, updateAllInstallments?: boolean) => Promise<void>;
+  addTransaction: (
+    transaction: Transaction,
+    accountId: number,
+    bankId: number
+  ) => Promise<void>;
+  deleteTransaction: (
+    accountId: number,
+    bankId: number,
+    transactionId: number,
+    deleteAllInstallments?: boolean
+  ) => Promise<void>;
+  updateTransaction: (
+    transaction: Transaction,
+    accountId: number,
+    bankId: number,
+    updateAllInstallments?: boolean
+  ) => Promise<void>;
   payCreditCardDebt: (
     accountId: number,
     bankId: number,
     amount: number,
     paidAt?: string,
     note?: string
+  ) => Promise<void>;
+  payInstallment: (
+    accountId: number,
+    bankId: number,
+    transactionId: number,
+    amount: number,
+    paidAt?: string
   ) => Promise<void>;
   setBankDataList: (data: any[]) => void;
 }
@@ -44,7 +65,12 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
   loadAllData: async () => {
     const user = useAuthStore.getState().user;
     if (!user) {
-      set({ transactions: [], filteredTransactions: [], bankDataList: [], isLoading: false });
+      set({
+        transactions: [],
+        filteredTransactions: [],
+        bankDataList: [],
+        isLoading: false,
+      });
       return;
     }
 
@@ -132,7 +158,12 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
     }
   },
 
-  deleteTransaction: async (accountId, bankId, transactionId, deleteAllInstallments = false) => {
+  deleteTransaction: async (
+    accountId,
+    bankId,
+    transactionId,
+    deleteAllInstallments = false
+  ) => {
     const user = useAuthStore.getState().user;
     if (!user) return;
 
@@ -140,7 +171,9 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
 
     try {
       const { bankDataList, transactions } = get();
-      const txToDelete = transactions.find((t: Transaction) => t.transactionId === transactionId);
+      const txToDelete = transactions.find(
+        (t: Transaction) => t.transactionId === transactionId
+      );
       if (!txToDelete) {
         set({ isLoading: false });
         return;
@@ -150,23 +183,26 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
 
       if (deleteAllInstallments) {
         if (txToDelete.parentTransactionId) {
-          const siblings = transactions.filter(
-            (t: Transaction) => t.parentTransactionId === txToDelete.parentTransactionId
-          );
-          siblings.forEach((t) => idsToDelete.add(t.transactionId));
+          transactions
+            .filter(
+              (t: Transaction) =>
+                t.parentTransactionId === txToDelete.parentTransactionId
+            )
+            .forEach((t) => idsToDelete.add(t.transactionId));
         } else if (txToDelete.initialInstallmentDate) {
-          const related = transactions.filter(
-            (t: Transaction) =>
-              t.initialInstallmentDate === txToDelete.initialInstallmentDate &&
-              t.title === txToDelete.title
-          );
-          related.forEach((t) => idsToDelete.add(t.transactionId));
+          transactions
+            .filter(
+              (t: Transaction) =>
+                t.initialInstallmentDate ===
+                  txToDelete.initialInstallmentDate &&
+                t.title === txToDelete.title
+            )
+            .forEach((t) => idsToDelete.add(t.transactionId));
         }
       }
 
       const updatedBanks = bankDataList.map((bank: any) => {
         if (bank.bankId !== bankId) return bank;
-
         return {
           ...bank,
           accounts: (bank.accounts || []).map((acc: any) => {
@@ -208,7 +244,12 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
     }
   },
 
-  updateTransaction: async (transaction, accountId, bankId, updateAllInstallments = false) => {
+  updateTransaction: async (
+    transaction,
+    accountId,
+    bankId,
+    updateAllInstallments = false
+  ) => {
     const user = useAuthStore.getState().user;
     if (!user) return;
 
@@ -220,7 +261,6 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
 
       const updatedBanks = bankDataList.map((bank: any) => {
         if (bank.bankId !== bankId) return bank;
-
         return {
           ...bank,
           accounts: (bank.accounts || []).map((acc: any) => {
@@ -230,7 +270,9 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
 
             if (updateAllInstallments && cleanedTx.parentTransactionId) {
               updatedTxList = updatedTxList.map((t: any) => {
-                if (t.parentTransactionId === cleanedTx.parentTransactionId) {
+                if (
+                  t.parentTransactionId === cleanedTx.parentTransactionId
+                ) {
                   return {
                     ...t,
                     title: cleanedTx.title,
@@ -261,7 +303,9 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
       const updatedTransactions =
         updateAllInstallments && cleanedTx.parentTransactionId
           ? transactions.map((t: Transaction) => {
-              if (t.parentTransactionId === cleanedTx.parentTransactionId) {
+              if (
+                t.parentTransactionId === cleanedTx.parentTransactionId
+              ) {
                 return {
                   ...t,
                   title: cleanedTx.title,
@@ -296,6 +340,12 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
     }
   },
 
+  /**
+   * Pay credit card debt:
+   * 1. Records a debtPayment entry on the account
+   * 2. Creates a surplus (income-type) transaction so it shows in outcome page
+   * 3. Recalculates all debt figures
+   */
   payCreditCardDebt: async (accountId, bankId, amount, paidAt, note) => {
     const user = useAuthStore.getState().user;
     if (!user) return;
@@ -306,9 +356,47 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
     try {
       const { bankDataList, transactions } = get();
 
+      // Find account info for the payment transaction
+      let accountName = '';
+      let bankName = '';
+      let currency = 'TRY';
+
+      for (const bank of bankDataList) {
+        if (bank.bankId === bankId) {
+          bankName = bank.bankName;
+          const acc = (bank.accounts || []).find(
+            (a: any) => a.accountId === accountId
+          );
+          if (acc) {
+            accountName = acc.name;
+            currency = acc.currency || 'TRY';
+          }
+        }
+      }
+
+      const paymentDate = paidAt
+        ? toLocalISOString(parseLocalDateInput(paidAt))
+        : toLocalISOString(new Date());
+
+      // Create a surplus transaction that represents the payment
+      const paymentTx = createTransaction({
+        title: `${bankName} ${accountName} Borç Ödemesi`,
+        amount,
+        category: 'Borç Ödemesi',
+        subcategory: accountName,
+        date: paymentDate,
+        currency,
+        isSurplus: true,
+        description: note?.trim() || `Kredi kartı borç ödemesi`,
+        isFromInvoice: false,
+        isProvisioned: false,
+        transactionType: TransactionType.normal,
+      });
+
+      const cleanedPaymentTx = cleanForFirestore(paymentTx);
+
       const updatedBanks = bankDataList.map((bank: any) => {
         if (bank.bankId !== bankId) return bank;
-
         return {
           ...bank,
           accounts: (bank.accounts || []).map((acc: any) => {
@@ -324,9 +412,15 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
                 {
                   paymentId: Date.now(),
                   amount: safeAmount,
-                  date: paidAt || new Date().toISOString(),
+                  date: paymentDate,
                   note: note?.trim() || '',
+                  transactionId: paymentTx.transactionId,
                 },
+              ],
+              // Also add the surplus tx to the account's transactions
+              transactions: [
+                ...(acc.transactions || []),
+                cleanedPaymentTx,
               ],
             };
 
@@ -335,18 +429,158 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
         };
       });
 
+      const allTransactions = [...transactions, cleanedPaymentTx];
+
       await FirestoreService.saveAllData(user.uid, {
         bankData: updatedBanks,
-        transactions,
+        transactions: allTransactions,
       });
 
       set({
         bankDataList: updatedBanks,
+        transactions: allTransactions,
+        filteredTransactions: allTransactions,
         isLoading: false,
       });
     } catch (e) {
       console.error('Error paying debt:', e);
       set({ error: 'Borç ödemesi kaydedilemedi', isLoading: false });
+      throw e;
+    }
+  },
+
+  /**
+   * Pay a single installment transaction:
+   * marks it as paid and records a debt payment
+   */
+  payInstallment: async (accountId, bankId, transactionId, amount, paidAt) => {
+    const user = useAuthStore.getState().user;
+    if (!user) return;
+
+    set({ isLoading: true, error: null });
+
+    try {
+      const { bankDataList, transactions } = get();
+
+      const targetTx = transactions.find(
+        (t) => t.transactionId === transactionId
+      );
+      if (!targetTx) {
+        set({ isLoading: false });
+        return;
+      }
+
+      // Find account info
+      let accountName = '';
+      let bankName = '';
+      let currency = targetTx.currency || 'TRY';
+
+      for (const bank of bankDataList) {
+        if (bank.bankId === bankId) {
+          bankName = bank.bankName;
+          const acc = (bank.accounts || []).find(
+            (a: any) => a.accountId === accountId
+          );
+          if (acc) {
+            accountName = acc.name;
+          }
+        }
+      }
+
+      const paymentDate = paidAt
+        ? toLocalISOString(parseLocalDateInput(paidAt))
+        : toLocalISOString(new Date());
+
+      const paymentAmount = amount || targetTx.amount;
+
+      // Create payment transaction (surplus)
+      const paymentTx = createTransaction({
+        title: `${targetTx.title} - Taksit Ödemesi`,
+        amount: paymentAmount,
+        category: 'Borç Ödemesi',
+        subcategory: targetTx.category || accountName,
+        date: paymentDate,
+        currency,
+        isSurplus: true,
+        description: `${targetTx.currentInstallment || '?'}/${targetTx.installment || '?'} taksit ödemesi`,
+        isFromInvoice: false,
+        isProvisioned: false,
+        transactionType: TransactionType.normal,
+      });
+
+      const cleanedPaymentTx = cleanForFirestore(paymentTx);
+
+      // Update the original transaction as paid
+      const updatedBanks = bankDataList.map((bank: any) => {
+        if (bank.bankId !== bankId) return bank;
+        return {
+          ...bank,
+          accounts: (bank.accounts || []).map((acc: any) => {
+            if (acc.accountId !== accountId) return acc;
+
+            // Mark the installment as paid in account transactions
+            const updatedTxList = (acc.transactions || []).map((t: any) => {
+              if (t.transactionId === transactionId) {
+                return {
+                  ...t,
+                  isInstallmentPaid: true,
+                  paidAmount: paymentAmount,
+                };
+              }
+              return t;
+            });
+
+            const updated = {
+              ...acc,
+              transactions: [...updatedTxList, cleanedPaymentTx],
+              debtPayments: [
+                ...(acc.debtPayments || []),
+                {
+                  paymentId: Date.now(),
+                  amount: paymentAmount,
+                  date: paymentDate,
+                  note: `${targetTx.title} taksit ödemesi`,
+                  transactionId: paymentTx.transactionId,
+                  paidTransactionId: transactionId,
+                },
+              ],
+            };
+
+            return acc.isDebit === false
+              ? recalculateCreditAccount(updated)
+              : updated;
+          }),
+        };
+      });
+
+      // Update global transactions list
+      const updatedTransactions = transactions.map((t: Transaction) => {
+        if (t.transactionId === transactionId) {
+          return {
+            ...t,
+            isInstallmentPaid: true,
+            paidAmount: paymentAmount,
+          };
+        }
+        return t;
+      });
+
+      const allTransactions = [...updatedTransactions, cleanedPaymentTx];
+
+      await FirestoreService.saveAllData(user.uid, {
+        bankData: updatedBanks,
+        transactions: allTransactions,
+      });
+
+      set({
+        bankDataList: updatedBanks,
+        transactions: allTransactions,
+        filteredTransactions: allTransactions,
+        isLoading: false,
+      });
+    } catch (e) {
+      console.error('Error paying installment:', e);
+      set({ error: 'Taksit ödemesi kaydedilemedi', isLoading: false });
       throw e;
     }
   },
