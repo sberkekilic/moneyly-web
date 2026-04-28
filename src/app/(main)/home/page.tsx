@@ -15,6 +15,11 @@ import Link from 'next/link';
 import { AuthGuard } from '@/components/AuthGuard';
 import { UpcomingPayments } from '@/components/UpcomingPayments';
 import { DebtPaymentTracker } from '@/components/home/DebtPaymentTracker';
+import {
+  calculateCreditCardCycle,
+  formatMonthYear,
+  toDateInputValue,
+} from '@/lib/creditCard';
 
 // ── Currency helpers ──────────────────────────────────────
 
@@ -91,26 +96,18 @@ export default function HomePage() {
     }
   }, [bankDataList]);
 
-  // Auto-set date range for credit cards using same logic as account page
   useEffect(() => {
     if (selectedAccount?.isDebit === false) {
-      const cutoffDay = selectedAccount.cutoffDate || 1;
-      const today = new Date();
-      const y = today.getFullYear();
-      const m = today.getMonth();
-
-      const thisMonthCutoff = new Date(y, m, cutoffDay);
-      const periodStart =
-        today >= thisMonthCutoff ? thisMonthCutoff : new Date(y, m - 1, cutoffDay);
-      // Period end = next cutoff - 1 day (last day of billing cycle)
-      const periodEnd = new Date(periodStart);
-      periodEnd.setMonth(periodEnd.getMonth() + 1);
-      periodEnd.setDate(periodEnd.getDate() - 1);
-
-      setStartDate(periodStart.toISOString().split('T')[0]);
-      setEndDate(periodEnd.toISOString().split('T')[0]);
+      const cycle = calculateCreditCardCycle(selectedAccount.cutoffDate || 1);
+      setStartDate(toDateInputValue(cycle.currentPeriodStart));
+      setEndDate(toDateInputValue(cycle.currentPeriodEndInclusive));
     }
-  }, [selectedAccount]);
+  }, [selectedAccount?.accountId, selectedAccount?.cutoffDate, selectedAccount?.isDebit]);
+
+  const selectedCycle =
+    selectedAccount?.isDebit === false
+      ? calculateCreditCardCycle(selectedAccount.cutoffDate || 1)
+      : null;
 
   // ── Filtering ──
   const filtered = transactions.filter((t) => {
@@ -204,6 +201,8 @@ export default function HomePage() {
                 Tarih Aralığı
               </span>
             </div>
+
+            {/* Date inputs row */}
             <div className="flex flex-wrap gap-3">
               <input
                 type="date"
@@ -224,6 +223,24 @@ export default function HomePage() {
                 <RefreshCw size={16} className="text-gray-400" />
               </button>
             </div>
+
+            {/* Billing period info — only shown for credit cards, BELOW inputs */}
+            {selectedCycle && (
+              <div className="mt-3 flex flex-wrap gap-2">
+                <span className="px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-900/20 text-xs font-semibold text-blue-600">
+                  {formatMonthYear(selectedCycle.currentPeriodStart, 'tr-TR')} dönemi
+                </span>
+                <span className="px-2.5 py-1 rounded-lg bg-gray-50 dark:bg-gray-700 text-xs text-gray-600 dark:text-gray-300">
+                  Ekstre: {toDateInputValue(selectedCycle.statementCutoffDate)} → {toDateInputValue(selectedCycle.statementDueDate)}
+                </span>
+                <span className="px-2.5 py-1 rounded-lg bg-gray-50 dark:bg-gray-700 text-xs text-gray-600 dark:text-gray-300">
+                  Sonraki Kesim: {toDateInputValue(selectedCycle.nextCutoffDate)}
+                </span>
+                <span className="px-2.5 py-1 rounded-lg bg-gray-50 dark:bg-gray-700 text-xs text-gray-600 dark:text-gray-300">
+                  Sonraki Son Ödeme: {toDateInputValue(selectedCycle.nextDueDate)}
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-5">

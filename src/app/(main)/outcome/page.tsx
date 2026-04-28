@@ -10,7 +10,7 @@ import { formatAmount, formatDateShort } from '@/lib/formatters';
 import {
   TrendingDown, Folder, Tag, Trash2, Plus,
   ArrowDownRight, Calendar, Shield, Receipt,
-  Inbox, ArrowLeft, Wallet, BarChart3, ChevronRight, Pencil
+  Inbox, ArrowLeft, Wallet, BarChart3, ChevronRight, Pencil, RefreshCw
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import toast from 'react-hot-toast';
@@ -18,25 +18,27 @@ import Link from 'next/link';
 import { AddTransactionModal } from '@/components/transaction/AddTransactionModal';
 import { AuthGuard } from '@/components/AuthGuard';
 import { EditTransactionModal } from '@/components/transaction/EditTransactionModal';
+import {
+  calculateCreditCardCycle,
+  formatMonthYear,
+  isDateInRangeInclusive,
+  parseLocalDateInput,
+  toDateInputValue,
+} from '@/lib/creditCard';
 
 const CATEGORY_COLORS = [
   '#3B82F6', '#F97316', '#14B8A6', '#8B5CF6',
   '#EF4444', '#22C55E', '#6366F1', '#EC4899',
 ];
 
-// Currency symbol map
 const CURRENCY_SYMBOLS: Record<string, string> = {
-  TRY: '₺',
-  EUR: '€',
-  USD: '$',
-  GBP: '£',
+  TRY: '₺', EUR: '€', USD: '$', GBP: '£',
 };
 
 function getCurrencySymbol(currency: string): string {
   return CURRENCY_SYMBOLS[currency] ?? currency;
 }
 
-// Groups totals by currency: { TRY: 1500, EUR: 200 }
 function getTotalsByCurrency(transactions: Transaction[]): Record<string, number> {
   const totals: Record<string, number> = {};
   transactions.forEach((tx) => {
@@ -44,6 +46,15 @@ function getTotalsByCurrency(transactions: Transaction[]): Record<string, number
     totals[cur] = (totals[cur] ?? 0) + tx.amount;
   });
   return totals;
+}
+
+// ── helpers used by sub-components (no hooks, safe at module level) ──
+function buildDateRangeDefaults() {
+  const now = new Date();
+  return {
+    start: `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`,
+    end: toDateInputValue(now),
+  };
 }
 
 export default function OutcomePage() {
@@ -60,7 +71,11 @@ export default function OutcomePage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
 
-  // ── Translations ──
+  // ── Date range state — INSIDE the component ──
+  const defaults = buildDateRangeDefaults();
+  const [startDate, setStartDate] = useState(defaults.start);
+  const [endDate, setEndDate] = useState(defaults.end);
+
   const t = {
     title:         lang === 'tr' ? 'Giderler' : 'Expenses',
     selectAccount: lang === 'tr' ? 'Hesap Seçin' : 'Select Account',
@@ -84,6 +99,11 @@ export default function OutcomePage() {
     topCategories: lang === 'tr' ? 'En Çok Harcanan' : 'Top Spending',
     tx:            lang === 'tr' ? 'işlem' : 'transactions',
     byCurrency:    lang === 'tr' ? 'Para Birimine Göre' : 'By Currency',
+    period:        lang === 'tr' ? 'Dönem' : 'Period',
+    dateRange:     lang === 'tr' ? 'Tarih Aralığı' : 'Date Range',
+    reset:         lang === 'tr' ? 'Sıfırla' : 'Reset',
+    statement:     lang === 'tr' ? 'Ekstre' : 'Statement',
+    nextCutoff:    lang === 'tr' ? 'Sonraki Kesim' : 'Next Cutoff',
   };
 
   useEffect(() => {
@@ -102,6 +122,7 @@ export default function OutcomePage() {
     }
   }, [bankDataList]);
 
+  // ── Resolve selectedAccount from ref ──
   const selectedAccount = (() => {
     if (!selectedAccountRef) return null;
     for (const bank of bankDataList) {
@@ -115,9 +136,42 @@ export default function OutcomePage() {
     return null;
   })();
 
+  // ── Auto-set billing period when credit card selected ──
+  useEffect(() => {
+    if (!selectedAccount) return;
+    if (selectedAccount.isDebit === false) {
+      const cycle = calculateCreditCardCycle(selectedAccount.cutoffDate || 1);
+      setStartDate(toDateInputValue(cycle.currentPeriodStart));
+      setEndDate(toDateInputValue(cycle.currentPeriodEndInclusive));
+    } else {
+      const d = buildDateRangeDefaults();
+      setStartDate(d.start);
+      setEndDate(d.end);
+    }
+  }, [selectedAccount?.accountId, selectedAccount?.cutoffDate, selectedAccount?.isDebit]);
+
+  // ── Cycle info for UI (only for credit cards) ──
+  const selectedCycle =
+    selectedAccount?.isDebit === false
+      ? calculateCreditCardCycle(selectedAccount.cutoffDate || 1)
+      : null;
+
+  const isCreditCard = selectedAccount?.isDebit === false;
+
+  const handleResetDates = () => {
+    if (isCreditCard && selectedAccount) {
+      const cycle = calculateCreditCardCycle(selectedAccount.cutoffDate || 1);
+      setStartDate(toDateInputValue(cycle.currentPeriodStart));
+      setEndDate(toDateInputValue(cycle.currentPeriodEndInclusive));
+    } else {
+      const d = buildDateRangeDefaults();
+      setStartDate(d.start);
+      setEndDate(d.end);
+    }
+  };
+
   const handleAccountChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     const [bankIdStr, accountIdStr] = e.target.value.split('_');
-    const bankId = Number(bankIdStr);
     const accountId = Number(accountIdStr);
     for (const bank of bankDataList) {
       const found = bank.accounts?.find((a: any) => a.accountId === accountId);
@@ -129,7 +183,13 @@ export default function OutcomePage() {
   };
 
   const getAccountTransactions = (): Transaction[] => {
-    return selectedAccount?.transactions ?? [];
+    const txs = selectedAccount?.transactions ?? [];
+    // If no date range set, return all
+    if (!startDate && !endDate) return txs;
+    return txs.filter((tx) => {
+      const d = parseLocalDateInput(tx.date);
+      return isDateInRangeInclusive(d, startDate, endDate);
+    });
   };
 
   const getGrouped = () => {
@@ -147,27 +207,20 @@ export default function OutcomePage() {
 
   const grouped = getGrouped();
 
-  // All expense transactions (flat)
   const allExpenseTxs: Transaction[] = Object.values(grouped).flatMap((subMap) =>
     Object.values(subMap).flat()
   );
 
-  // Totals grouped by currency
   const totalsByCurrency = getTotalsByCurrency(allExpenseTxs);
 
-  // Primary total (TRY fallback) — used for percentage calculations in category bars
   const primaryCurrency = Object.keys(totalsByCurrency).includes('TRY')
     ? 'TRY'
     : (Object.keys(totalsByCurrency)[0] ?? 'TRY');
-  const primaryTotal = totalsByCurrency[primaryCurrency] ?? 0;
 
-  // Top categories (based on primary currency only, for the summary strip)
   const topCategories = Object.entries(grouped)
     .map(([cat, subMap]) => ({
       name: cat,
-      totalsByCurrency: getTotalsByCurrency(
-        Object.values(subMap).flat()
-      ),
+      totalsByCurrency: getTotalsByCurrency(Object.values(subMap).flat()),
       count: Object.values(subMap).reduce((s, txs) => s + txs.length, 0),
     }))
     .sort((a, b) => (b.totalsByCurrency[primaryCurrency] ?? 0) - (a.totalsByCurrency[primaryCurrency] ?? 0))
@@ -176,10 +229,7 @@ export default function OutcomePage() {
   const handleDelete = async (tx: Transaction) => {
     if (!selectedAccount) return;
     try {
-      const choice =
-        tx.installment && tx.installment > 1
-          ? confirm(t.deleteAll)
-          : false;
+      const choice = tx.installment && tx.installment > 1 ? confirm(t.deleteAll) : false;
       await deleteTransaction(
         selectedAccount.accountId,
         selectedAccount.bankId,
@@ -192,11 +242,8 @@ export default function OutcomePage() {
     }
   };
 
-  const handleEdit = (tx: Transaction) => {
-    setEditingTx(tx);
-  };
+  const handleEdit = (tx: Transaction) => setEditingTx(tx);
 
-  const isCreditCard = selectedAccount?.isDebit === false;
   const expenseCount = getAccountTransactions().filter((tx) => !tx.isSurplus).length;
 
   if (isLoading) {
@@ -266,10 +313,7 @@ export default function OutcomePage() {
                 <div className="mt-4 grid grid-cols-2 gap-2">
                   <div className="bg-gray-50 dark:bg-gray-700 rounded-xl p-3">
                     <p className="text-[10px] text-gray-400 mb-0.5">{t.accountType}</p>
-                    <p className={cn(
-                      'text-xs font-bold',
-                      isCreditCard ? 'text-purple-600' : 'text-green-600'
-                    )}>
+                    <p className={cn('text-xs font-bold', isCreditCard ? 'text-purple-600' : 'text-green-600')}>
                       {isCreditCard ? t.creditCard : t.bankAccount}
                     </p>
                   </div>
@@ -284,7 +328,7 @@ export default function OutcomePage() {
             </div>
           )}
 
-          {/* Total Card — now shows per-currency totals */}
+          {/* Total Card */}
           <div className="lg:col-span-3 bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-5">
             <div className="flex items-start justify-between mb-4">
               <div className="flex-1 min-w-0">
@@ -297,7 +341,6 @@ export default function OutcomePage() {
                   </span>
                 </div>
 
-                {/* ── Per-currency totals ── */}
                 {Object.keys(totalsByCurrency).length === 0 ? (
                   <p className="text-4xl font-bold text-gray-900 dark:text-white tracking-tight">
                     {formatAmount(0)} ₺
@@ -332,26 +375,21 @@ export default function OutcomePage() {
               </div>
             </div>
 
-            {/* Top categories strip */}
             {topCategories.length > 0 && (
               <div className="border-t border-gray-100 dark:border-gray-700 pt-3 mt-3">
                 <p className="text-xs font-semibold text-gray-400 mb-2">{t.topCategories}</p>
                 <div className="flex flex-wrap gap-2">
                   {topCategories.map(({ name, totalsByCurrency: catCurrencies }, idx) => {
                     const color = CATEGORY_COLORS[idx % CATEGORY_COLORS.length];
-                    // Show all currencies for this category
-                    const currencyEntries = Object.entries(catCurrencies);
                     return (
                       <div
                         key={name}
                         className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/50"
                       >
                         <div className="w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
-                        <span className="text-xs font-medium text-gray-700 dark:text-gray-300">
-                          {name}
-                        </span>
+                        <span className="text-xs font-medium text-gray-700 dark:text-gray-300">{name}</span>
                         <span className="text-xs font-bold text-gray-900 dark:text-white">
-                          {currencyEntries
+                          {Object.entries(catCurrencies)
                             .map(([cur, amt]) => `${formatAmount(amt)}${getCurrencySymbol(cur)}`)
                             .join(' + ')}
                         </span>
@@ -361,6 +399,54 @@ export default function OutcomePage() {
                 </div>
               </div>
             )}
+          </div>
+        </div>
+
+        {/* ── Date Range Filter ── */}
+        <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-5">
+          <div className="flex items-center gap-2 mb-3">
+            <Calendar size={16} className="text-blue-500" />
+            <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+              {isCreditCard ? `${t.period} / ${t.dateRange}` : t.dateRange}
+            </span>
+          </div>
+
+          {/* Credit card billing period chips */}
+          {selectedCycle && (
+            <div className="flex flex-wrap gap-2 mb-3">
+              <span className="px-2.5 py-1 rounded-lg bg-purple-50 dark:bg-purple-900/20 text-xs font-semibold text-purple-600">
+                {formatMonthYear(selectedCycle.currentPeriodStart, lang === 'tr' ? 'tr-TR' : 'en-US')} {t.period.toLowerCase()}
+              </span>
+              <span className="px-2.5 py-1 rounded-lg bg-gray-50 dark:bg-gray-700 text-xs text-gray-600 dark:text-gray-300">
+                {t.statement}: {toDateInputValue(selectedCycle.statementCutoffDate)} → {toDateInputValue(selectedCycle.statementDueDate)}
+              </span>
+              <span className="px-2.5 py-1 rounded-lg bg-gray-50 dark:bg-gray-700 text-xs text-gray-600 dark:text-gray-300">
+                {t.nextCutoff}: {toDateInputValue(selectedCycle.nextCutoffDate)}
+              </span>
+            </div>
+          )}
+
+          {/* Date pickers */}
+          <div className="flex flex-wrap gap-3">
+            <input
+              type="date"
+              value={startDate}
+              onChange={(e) => setStartDate(e.target.value)}
+              className="flex-1 min-w-[140px] bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl px-4 py-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <input
+              type="date"
+              value={endDate}
+              onChange={(e) => setEndDate(e.target.value)}
+              className="flex-1 min-w-[140px] bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl px-4 py-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+            />
+            <button
+              onClick={handleResetDates}
+              className="px-3 py-2.5 border border-gray-200 dark:border-gray-600 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+              title={t.reset}
+            >
+              <RefreshCw size={16} className="text-gray-400" />
+            </button>
           </div>
         </div>
 
@@ -416,10 +502,8 @@ export default function OutcomePage() {
 }
 
 // ══════════════════════════════════════════════════════════
-// SUB-COMPONENTS
+// SUB-COMPONENTS (no hooks that depend on page state)
 // ══════════════════════════════════════════════════════════
-
-// ── Category Progress Bars ────────────────────────────────
 
 function CategoryProgressBars({
   grouped,
@@ -431,8 +515,6 @@ function CategoryProgressBars({
   t: any;
 }) {
   const categories = Object.entries(grouped) as [string, Record<string, Transaction[]>][];
-
-  // Total per currency across all categories
   const allTxs = categories.flatMap(([, subMap]) => Object.values(subMap).flat());
   const grandTotalsByCurrency = getTotalsByCurrency(allTxs);
   const primaryGrandTotal = grandTotalsByCurrency[primaryCurrency] ?? 0;
@@ -449,17 +531,12 @@ function CategoryProgressBars({
           const flatTxs = Object.values(subMap).flat();
           const catCurrencies = getTotalsByCurrency(flatTxs);
           const catPrimaryTotal = catCurrencies[primaryCurrency] ?? 0;
-
-          // Percentage is based on primary currency only
           const percent = primaryGrandTotal > 0 ? catPrimaryTotal / primaryGrandTotal : 0;
           const color = CATEGORY_COLORS[idx % CATEGORY_COLORS.length];
           const txCount = flatTxs.length;
 
           return (
-            <div
-              key={cat}
-              className="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-4 space-y-2"
-            >
+            <div key={cat} className="bg-gray-50 dark:bg-gray-700/50 rounded-xl p-4 space-y-2">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <div className="w-3 h-3 rounded-full" style={{ backgroundColor: color }} />
@@ -476,22 +553,15 @@ function CategoryProgressBars({
               <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2">
                 <div
                   className="h-2 rounded-full transition-all duration-500"
-                  style={{
-                    width: `${(percent * 100).toFixed(0)}%`,
-                    backgroundColor: color,
-                  }}
+                  style={{ width: `${(percent * 100).toFixed(0)}%`, backgroundColor: color }}
                 />
               </div>
 
               <div className="flex items-center justify-between">
                 <span className="text-xs text-gray-500">{txCount} {t.tx}</span>
-                {/* Show each currency total separately */}
                 <div className="flex flex-col items-end gap-0.5">
                   {Object.entries(catCurrencies).map(([cur, amt]) => (
-                    <span
-                      key={cur}
-                      className="text-sm font-bold text-gray-900 dark:text-white tabular-nums"
-                    >
+                    <span key={cur} className="text-sm font-bold text-gray-900 dark:text-white tabular-nums">
                       {formatAmount(amt)}{getCurrencySymbol(cur)}
                     </span>
                   ))}
@@ -504,8 +574,6 @@ function CategoryProgressBars({
     </div>
   );
 }
-
-// ── Transaction Groups ────────────────────────────────────
 
 function TransactionGroups({
   grouped,
@@ -525,9 +593,7 @@ function TransactionGroups({
   const [expandedSub, setExpandedSub] = useState<Record<string, boolean>>(() => {
     const initial: Record<string, boolean> = {};
     Object.entries(grouped).forEach(([cat, subMap]) => {
-      Object.keys(subMap).forEach((sub) => {
-        initial[`${cat}_${sub}`] = true;
-      });
+      Object.keys(subMap).forEach((sub) => { initial[`${cat}_${sub}`] = true; });
     });
     return initial;
   });
@@ -535,9 +601,7 @@ function TransactionGroups({
   useEffect(() => {
     setExpanded((prev) => {
       const next = { ...prev };
-      Object.keys(grouped).forEach((k) => {
-        if (next[k] === undefined) next[k] = true;
-      });
+      Object.keys(grouped).forEach((k) => { if (next[k] === undefined) next[k] = true; });
       return next;
     });
     setExpandedSub((prev) => {
@@ -567,7 +631,6 @@ function TransactionGroups({
           const catCurrencies = getTotalsByCurrency(flatTxs);
           const isOpen = expanded[cat] ?? true;
 
-          // Summary label: "1500₺ + 200€"
           const catSummary = Object.entries(catCurrencies)
             .map(([cur, amt]) => `${formatAmount(amt)}${getCurrencySymbol(cur)}`)
             .join(' + ');
@@ -595,63 +658,41 @@ function TransactionGroups({
                 </div>
                 <ChevronRight
                   size={16}
-                  className={cn(
-                    'text-gray-400 transition-transform duration-200 flex-shrink-0',
-                    isOpen && 'rotate-90'
-                  )}
+                  className={cn('text-gray-400 transition-transform duration-200 flex-shrink-0', isOpen && 'rotate-90')}
                 />
               </button>
 
-              {isOpen &&
-                Object.entries(subMap).map(([sub, txs]) => {
-                  const subKey = `${cat}_${sub}`;
-                  const isSubOpen = expandedSub[subKey] ?? true;
-                  const subCurrencies = getTotalsByCurrency(txs);
-                  const subSummary = Object.entries(subCurrencies)
-                    .map(([cur, amt]) => `${formatAmount(amt)}${getCurrencySymbol(cur)}`)
-                    .join(' + ');
+              {isOpen && Object.entries(subMap).map(([sub, txs]) => {
+                const subKey = `${cat}_${sub}`;
+                const isSubOpen = expandedSub[subKey] ?? true;
+                const subCurrencies = getTotalsByCurrency(txs);
+                const subSummary = Object.entries(subCurrencies)
+                  .map(([cur, amt]) => `${formatAmount(amt)}${getCurrencySymbol(cur)}`)
+                  .join(' + ');
 
-                  return (
-                    <div key={sub} className="border-t border-gray-100 dark:border-gray-700">
-                      <button
-                        onClick={() =>
-                          setExpandedSub((p) => ({ ...p, [subKey]: !p[subKey] }))
-                        }
-                        className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
-                      >
-                        <Tag size={14} className="text-blue-500 ml-4 flex-shrink-0" />
-                        <span className="flex-1 text-sm font-medium text-gray-800 dark:text-gray-200">
-                          {sub}
-                        </span>
-                        <span className="text-xs text-gray-500 mr-1">
-                          {txs.length} · {subSummary}
-                        </span>
-                        <ChevronRight
-                          size={14}
-                          className={cn(
-                            'text-gray-400 transition-transform duration-200 flex-shrink-0',
-                            isSubOpen && 'rotate-90'
-                          )}
-                        />
-                      </button>
+                return (
+                  <div key={sub} className="border-t border-gray-100 dark:border-gray-700">
+                    <button
+                      onClick={() => setExpandedSub((p) => ({ ...p, [subKey]: !p[subKey] }))}
+                      className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+                    >
+                      <Tag size={14} className="text-blue-500 ml-4 flex-shrink-0" />
+                      <span className="flex-1 text-sm font-medium text-gray-800 dark:text-gray-200">{sub}</span>
+                      <span className="text-xs text-gray-500 mr-1">{txs.length} · {subSummary}</span>
+                      <ChevronRight
+                        size={14}
+                        className={cn('text-gray-400 transition-transform duration-200 flex-shrink-0', isSubOpen && 'rotate-90')}
+                      />
+                    </button>
 
-                      {isSubOpen &&
-                        txs
-                          .sort(
-                            (a, b) =>
-                              new Date(b.date).getTime() - new Date(a.date).getTime()
-                          )
-                          .map((tx) => (
-                            <TransactionTile
-                              key={tx.transactionId}
-                              tx={tx}
-                              onDelete={onDelete}
-                              onEdit={onEdit}
-                            />
-                          ))}
-                    </div>
-                  );
-                })}
+                    {isSubOpen && txs
+                      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                      .map((tx) => (
+                        <TransactionTile key={tx.transactionId} tx={tx} onDelete={onDelete} onEdit={onEdit} />
+                      ))}
+                  </div>
+                );
+              })}
             </div>
           );
         })}
@@ -659,8 +700,6 @@ function TransactionGroups({
     </div>
   );
 }
-
-// ── Transaction Tile ──────────────────────────────────────
 
 function TransactionTile({
   tx,
@@ -678,9 +717,7 @@ function TransactionTile({
       </div>
 
       <div className="flex-1 min-w-0">
-        <p className="text-xs font-semibold text-gray-900 dark:text-white truncate">
-          {tx.title}
-        </p>
+        <p className="text-xs font-semibold text-gray-900 dark:text-white truncate">{tx.title}</p>
         <div className="flex items-center gap-2 flex-wrap mt-0.5">
           <span className="flex items-center gap-1">
             <Calendar size={10} className="text-gray-400" />
@@ -700,7 +737,6 @@ function TransactionTile({
         </div>
       </div>
 
-      {/* Amount with proper currency symbol */}
       <p className="text-sm font-bold text-red-500 flex-shrink-0 tabular-nums">
         {formatAmount(tx.amount)} {getCurrencySymbol(tx.currency || 'TRY')}
       </p>
@@ -724,8 +760,6 @@ function TransactionTile({
     </div>
   );
 }
-
-// ── Empty State ───────────────────────────────────────────
 
 function EmptyState({ hasAccount, t }: { hasAccount: boolean; t: any }) {
   return (
