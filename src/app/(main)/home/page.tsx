@@ -1,3 +1,4 @@
+// src/app/(main)/home/page.tsx
 'use client';
 
 import { useEffect, useState } from 'react';
@@ -5,24 +6,76 @@ import { useTransactionStore } from '@/store/transactionStore';
 import { useIncomeStore } from '@/store/incomeStore';
 import { TransactionCard } from '@/components/transaction/TransactionCard';
 import { formatAmount } from '@/lib/formatters';
-import { TrendingUp, TrendingDown, Wallet, Eye, EyeOff, Calendar, RefreshCw, ArrowUpRight, ArrowDownRight, BarChart3, CreditCard } from 'lucide-react';
+import {
+  TrendingUp, TrendingDown, Wallet, Calendar, RefreshCw,
+  ArrowUpRight, ArrowDownRight, BarChart3, CreditCard,
+} from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Link from 'next/link';
 import { AuthGuard } from '@/components/AuthGuard';
 import { UpcomingPayments } from '@/components/UpcomingPayments';
 import { DebtPaymentTracker } from '@/components/home/DebtPaymentTracker';
 
+// ── Currency helpers ──────────────────────────────────────
+
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  TRY: '₺', EUR: '€', USD: '$', GBP: '£',
+};
+function sym(currency: string) {
+  return CURRENCY_SYMBOLS[currency] ?? currency;
+}
+
+/** Groups transaction amounts by currency → { TRY: 1500, EUR: 200 } */
+function totalsByCurrency(txs: any[]): Record<string, number> {
+  return txs.reduce<Record<string, number>>((acc, t) => {
+    const c = t.currency || 'TRY';
+    acc[c] = (acc[c] ?? 0) + t.amount;
+    return acc;
+  }, {});
+}
+
+/** Renders "1.500 ₺ + 200 €" — or just "0 ₺" when empty */
+function CurrencyTotals({
+  totals,
+  colorClass,
+}: {
+  totals: Record<string, number>;
+  colorClass: string;
+}) {
+  const entries = Object.entries(totals);
+  if (entries.length === 0) {
+    return (
+      <p className={cn('text-2xl font-bold', colorClass)}>
+        {formatAmount(0)} ₺
+      </p>
+    );
+  }
+  return (
+    <div className="flex flex-col gap-0.5">
+      {entries.map(([currency, amount]) => (
+        <p key={currency} className={cn('text-2xl font-bold leading-tight', colorClass)}>
+          {formatAmount(amount)}{' '}
+          <span className="text-lg">{sym(currency)}</span>
+        </p>
+      ))}
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────
+
 export default function HomePage() {
   const { transactions, loadAllData, bankDataList } = useTransactionStore();
   const { incomes, loadIncomes, getTotalIncome } = useIncomeStore();
   const [selectedAccount, setSelectedAccount] = useState<any>(null);
-const now = new Date();
-const [startDate, setStartDate] = useState(
-  `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
-);
-const [endDate, setEndDate] = useState(
-  `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-);
+
+  const now = new Date();
+  const [startDate, setStartDate] = useState(
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
+  );
+  const [endDate, setEndDate] = useState(
+    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+  );
   const [isDebtVisible, setIsDebtVisible] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -33,38 +86,56 @@ const [endDate, setEndDate] = useState(
   useEffect(() => {
     if (bankDataList.length > 0 && !selectedAccount) {
       const b = bankDataList[0];
-      if (b?.accounts?.[0]) setSelectedAccount({ ...b.accounts[0], bankId: b.bankId, bankName: b.bankName });
+      if (b?.accounts?.[0])
+        setSelectedAccount({ ...b.accounts[0], bankId: b.bankId, bankName: b.bankName });
     }
   }, [bankDataList]);
 
-  // After selectedAccount changes, set date range for credit cards
+  // Auto-set date range for credit cards using same logic as account page
   useEffect(() => {
-    if (selectedAccount && selectedAccount.isDebit === false) {
+    if (selectedAccount?.isDebit === false) {
       const cutoffDay = selectedAccount.cutoffDate || 1;
-      const now = new Date();
-      const currentMonth = new Date(now.getFullYear(), now.getMonth(), cutoffDay);
-      const periodStart = now.getDate() >= cutoffDay ? currentMonth : new Date(now.getFullYear(), now.getMonth() - 1, cutoffDay);
+      const today = new Date();
+      const y = today.getFullYear();
+      const m = today.getMonth();
+
+      const thisMonthCutoff = new Date(y, m, cutoffDay);
+      const periodStart =
+        today >= thisMonthCutoff ? thisMonthCutoff : new Date(y, m - 1, cutoffDay);
+      // Period end = next cutoff - 1 day (last day of billing cycle)
       const periodEnd = new Date(periodStart);
       periodEnd.setMonth(periodEnd.getMonth() + 1);
       periodEnd.setDate(periodEnd.getDate() - 1);
-      
+
       setStartDate(periodStart.toISOString().split('T')[0]);
       setEndDate(periodEnd.toISOString().split('T')[0]);
     }
   }, [selectedAccount]);
 
-  const totalIncome = getTotalIncome();
-
-  const filtered = transactions.filter(t => {
-    if (startDate && new Date(t.date) < new Date(startDate)) return false;
-    if (endDate && new Date(t.date) > new Date(endDate)) return false;
+  // ── Filtering ──
+  const filtered = transactions.filter((t) => {
+    const d = new Date(t.date);
+    if (startDate && d < new Date(startDate)) return false;
+    if (endDate && d > new Date(endDate)) return false;
     return true;
   });
 
-  const totalExpense = filtered.filter(t => !t.isSurplus).reduce((s, t) => s + t.amount, 0);
-  const netProfit = totalIncome - totalExpense;
-  const recentTx = [...filtered].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime());
-  const incomeTxList = incomes.slice(0, 15).map(i => ({
+  const expenseTxs = filtered.filter((t) => !t.isSurplus);
+
+  // Currency-split totals
+  const expenseTotals = totalsByCurrency(expenseTxs);
+
+  // For net profit we still use the TRY-only total (income is always TRY in your store)
+  const totalIncome = getTotalIncome();
+  const totalExpenseTRY = expenseTotals['TRY'] ?? 0;
+  const netProfit = totalIncome - totalExpenseTRY;
+  const hasMultiCurrency = Object.keys(expenseTotals).length > 1;
+
+  const recentExpenses = [...expenseTxs].sort(
+    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+  );
+
+  const incomeTxList = incomes.slice(0, 15).map((i) => ({
     transactionId: i.incomeId,
     title: i.source,
     amount: i.amount,
@@ -77,102 +148,174 @@ const [endDate, setEndDate] = useState(
     isFromInvoice: false,
     isProvisioned: false,
   }));
-  const expenseTransactions = recentTx.filter(t => !t.isSurplus);
-  const totalDebt = (() => {
-    if (!selectedAccount) return 0;
-    for (const bank of bankDataList) {
-      if (bank.bankId === selectedAccount.bankId) {
-        const acc = bank.accounts?.find((a: any) => a.accountId === selectedAccount.accountId);
-        if (acc) return acc.totalDebt ?? 0;
-      }
-    }
-    return 0;
-  })();
 
-  if (isLoading) return <div className="flex items-center justify-center py-20"><div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500" /></div>;
-  
+  if (isLoading)
+    return (
+      <div className="flex items-center justify-center py-20">
+        <div className="animate-spin rounded-full h-8 w-8 border-t-2 border-b-2 border-blue-500" />
+      </div>
+    );
+
   return (
     <AuthGuard>
       <div className="space-y-6">
+        {/* ── Metric Cards ── */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          <MetricCard label="Toplam Gelir" amount={totalIncome} icon={<TrendingUp size={20} />} trend={<ArrowUpRight size={14} />} color="green" />
-          <MetricCard label="Toplam Gider" amount={totalExpense} icon={<TrendingDown size={20} />} trend={<ArrowDownRight size={14} />} color="red" />
-          <MetricCard label="Net Kar/Zarar" amount={netProfit} icon={<Wallet size={20} />} color={netProfit >= 0 ? 'blue' : 'orange'} />
+          {/* Income — always single currency */}
+          <MetricCard
+            label="Toplam Gelir"
+            amount={totalIncome}
+            icon={<TrendingUp size={20} />}
+            trend={<ArrowUpRight size={14} />}
+            color="green"
+          />
+
+          {/* Expense — currency-aware */}
+          <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-5">
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-sm text-gray-500 dark:text-gray-400">Toplam Gider</p>
+              <div className="p-2 rounded-xl bg-red-100 dark:bg-red-900/30 text-red-500">
+                <TrendingDown size={20} />
+              </div>
+            </div>
+            <CurrencyTotals totals={expenseTotals} colorClass="text-red-500" />
+            {hasMultiCurrency && (
+              <p className="text-[10px] text-gray-400 mt-1">
+                Birden fazla para birimi
+              </p>
+            )}
+          </div>
+
+          {/* Net */}
+          <MetricCard
+            label={hasMultiCurrency ? 'Net (₺ bazlı)' : 'Net Kar/Zarar'}
+            amount={netProfit}
+            icon={<Wallet size={20} />}
+            color={netProfit >= 0 ? 'blue' : 'orange'}
+          />
         </div>
 
+        {/* ── Date Range + Quick Actions ── */}
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
           <div className="lg:col-span-2 bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-5">
-            <div className="flex items-center gap-2 mb-3"><Calendar size={16} className="text-blue-500" /><span className="text-sm font-semibold text-gray-700 dark:text-gray-300">Tarih Aralığı</span></div>
+            <div className="flex items-center gap-2 mb-3">
+              <Calendar size={16} className="text-blue-500" />
+              <span className="text-sm font-semibold text-gray-700 dark:text-gray-300">
+                Tarih Aralığı
+              </span>
+            </div>
             <div className="flex flex-wrap gap-3">
-              <input type="date" value={startDate} onChange={e => setStartDate(e.target.value)} className="flex-1 min-w-[140px] bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl px-4 py-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              <input type="date" value={endDate} onChange={e => setEndDate(e.target.value)} className="flex-1 min-w-[140px] bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl px-4 py-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500" />
-              <button onClick={() => { setStartDate(''); setEndDate(''); }} className="px-3 py-2.5 border border-gray-200 dark:border-gray-600 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"><RefreshCw size={16} className="text-gray-400" /></button>
+              <input
+                type="date"
+                value={startDate}
+                onChange={(e) => setStartDate(e.target.value)}
+                className="flex-1 min-w-[140px] bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl px-4 py-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <input
+                type="date"
+                value={endDate}
+                onChange={(e) => setEndDate(e.target.value)}
+                className="flex-1 min-w-[140px] bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl px-4 py-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
+              />
+              <button
+                onClick={() => { setStartDate(''); setEndDate(''); }}
+                className="px-3 py-2.5 border border-gray-200 dark:border-gray-600 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+              >
+                <RefreshCw size={16} className="text-gray-400" />
+              </button>
             </div>
           </div>
+
           <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-5">
-            <p className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">Hızlı İşlemler</p>
+            <p className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
+              Hızlı İşlemler
+            </p>
             <div className="grid grid-cols-2 gap-2">
-              {[{ label: 'Gelir Ekle', href: '/income', color: 'bg-green-50 dark:bg-green-900/20 text-green-600', icon: <TrendingUp size={16} /> }, { label: 'Gider Ekle', href: '/outcome', color: 'bg-red-50 dark:bg-red-900/20 text-red-500', icon: <TrendingDown size={16} /> }, { label: 'Yatırım', href: '/investment', color: 'bg-blue-50 dark:bg-blue-900/20 text-blue-500', icon: <BarChart3 size={16} /> }, { label: 'Hesaplar', href: '/account', color: 'bg-purple-50 dark:bg-purple-900/20 text-purple-500', icon: <CreditCard size={16} /> }].map(a => (
-                <Link key={a.href} href={a.href} className={cn('flex items-center gap-2 rounded-xl p-3 text-xs font-semibold transition-all hover:shadow-md', a.color)}>{a.icon} {a.label}</Link>
+              {[
+                { label: 'Gelir Ekle', href: '/income', color: 'bg-green-50 dark:bg-green-900/20 text-green-600', icon: <TrendingUp size={16} /> },
+                { label: 'Gider Ekle', href: '/outcome', color: 'bg-red-50 dark:bg-red-900/20 text-red-500', icon: <TrendingDown size={16} /> },
+                { label: 'Yatırım', href: '/investment', color: 'bg-blue-50 dark:bg-blue-900/20 text-blue-500', icon: <BarChart3 size={16} /> },
+                { label: 'Hesaplar', href: '/account', color: 'bg-purple-50 dark:bg-purple-900/20 text-purple-500', icon: <CreditCard size={16} /> },
+              ].map((a) => (
+                <Link
+                  key={a.href}
+                  href={a.href}
+                  className={cn('flex items-center gap-2 rounded-xl p-3 text-xs font-semibold transition-all hover:shadow-md', a.color)}
+                >
+                  {a.icon} {a.label}
+                </Link>
               ))}
             </div>
           </div>
         </div>
 
+        {/* ── Transaction Lists ── */}
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
-          <TxList title="Son Gelirler" icon={<TrendingUp size={16} className="text-green-600" />} txs={incomeTxList} emptyText="Gelir işlemi yok" />
-          <TxList title="Son Giderler" icon={<TrendingDown size={16} className="text-red-500" />} txs={expenseTransactions.slice(0, 15)} emptyText="Gider işlemi yok" />
+          <TxList
+            title="Son Gelirler"
+            icon={<TrendingUp size={16} className="text-green-600" />}
+            txs={incomeTxList}
+            emptyText="Gelir işlemi yok"
+          />
+          <TxList
+            title="Son Giderler"
+            icon={<TrendingDown size={16} className="text-red-500" />}
+            txs={recentExpenses.slice(0, 15)}
+            emptyText="Gider işlemi yok"
+          />
         </div>
 
-      {/* ── NEW: Debt Payment Tracker ── */}
-      <DebtPaymentTracker
-        bankDataList={bankDataList}
-        isVisible={isDebtVisible}
-        onToggleVisibility={() => setIsDebtVisible(!isDebtVisible)}
-      />
-<UpcomingPayments />
+        <DebtPaymentTracker
+          bankDataList={bankDataList}
+          isVisible={isDebtVisible}
+          onToggleVisibility={() => setIsDebtVisible(!isDebtVisible)}
+        />
+        <UpcomingPayments />
       </div>
     </AuthGuard>
   );
 }
 
+// ── MetricCard ────────────────────────────────────────────
+
 function MetricCard({ label, amount, icon, color, trend }: any) {
-  const m: any = { green: { bg: 'bg-green-50 dark:bg-green-900/10', text: 'text-green-600', iconBg: 'bg-green-100 dark:bg-green-900/30' }, red: { bg: 'bg-red-50 dark:bg-red-900/10', text: 'text-red-500', iconBg: 'bg-red-100 dark:bg-red-900/30' }, blue: { bg: 'bg-blue-50 dark:bg-blue-900/10', text: 'text-blue-600', iconBg: 'bg-blue-100 dark:bg-blue-900/30' }, orange: { bg: 'bg-orange-50 dark:bg-orange-900/10', text: 'text-orange-500', iconBg: 'bg-orange-100 dark:bg-orange-900/30' } };
+  const m: any = {
+    green:  { bg: 'bg-green-50 dark:bg-green-900/10',  text: 'text-green-600',  iconBg: 'bg-green-100 dark:bg-green-900/30'  },
+    red:    { bg: 'bg-red-50 dark:bg-red-900/10',      text: 'text-red-500',    iconBg: 'bg-red-100 dark:bg-red-900/30'      },
+    blue:   { bg: 'bg-blue-50 dark:bg-blue-900/10',    text: 'text-blue-600',   iconBg: 'bg-blue-100 dark:bg-blue-900/30'    },
+    orange: { bg: 'bg-orange-50 dark:bg-orange-900/10',text: 'text-orange-500', iconBg: 'bg-orange-100 dark:bg-orange-900/30'},
+  };
   const c = m[color] || m.blue;
   return (
     <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-5">
-      <div className="flex items-center justify-between mb-3"><p className="text-sm text-gray-500 dark:text-gray-400">{label}</p><div className={cn('p-2 rounded-xl', c.iconBg, c.text)}>{icon}</div></div>
-      <p className={cn('text-2xl font-bold', c.text)}>{formatAmount(Math.abs(amount))} ₺</p>
+      <div className="flex items-center justify-between mb-3">
+        <p className="text-sm text-gray-500 dark:text-gray-400">{label}</p>
+        <div className={cn('p-2 rounded-xl', c.iconBg, c.text)}>{icon}</div>
+      </div>
+      <p className={cn('text-2xl font-bold', c.text)}>
+        {formatAmount(Math.abs(amount))} ₺
+      </p>
     </div>
   );
 }
+
+// ── TxList ────────────────────────────────────────────────
 
 function TxList({ title, icon, txs, emptyText }: any) {
   return (
     <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-5">
-      <div className="flex items-center justify-between mb-4"><div className="flex items-center gap-2">{icon}<h2 className="text-sm font-bold text-gray-700 dark:text-gray-300">{title}</h2></div><span className="text-xs text-gray-400">{txs.length} işlem</span></div>
-      <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
-        {txs.length === 0 ? <p className="text-sm text-gray-400 text-center py-8">{emptyText}</p> : txs.map((t: any) => <TransactionCard key={t.transactionId} transaction={t} />)}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center gap-2">
+          {icon}
+          <h2 className="text-sm font-bold text-gray-700 dark:text-gray-300">{title}</h2>
+        </div>
+        <span className="text-xs text-gray-400">{txs.length} işlem</span>
       </div>
-    </div>
-  );
-}
-
-function DebtCard({ label, amount, color }: any) {
-  const c: any = { red: 'bg-red-50 dark:bg-red-900/10 text-red-600', orange: 'bg-orange-50 dark:bg-orange-900/10 text-orange-600', blue: 'bg-blue-50 dark:bg-blue-900/10 text-blue-600' };
-  return (
-    <div className={cn('rounded-xl p-4', c[color])}>
-      <p className="text-xs text-gray-500 mb-1">{label}</p>
-      <p className={cn('text-lg font-bold')}>{formatAmount(amount)} ₺</p>
-    </div>
-  );
-}
-
-function Mini({ label, value }: { label: string; value: string }) {
-  return (
-    <div className="bg-gray-50 dark:bg-gray-700 rounded-xl p-2 text-center">
-      <p className="text-[10px] text-gray-400">{label}</p>
-      <p className="text-xs font-semibold text-gray-900 dark:text-white">{value} ₺</p>
+      <div className="space-y-2 max-h-[400px] overflow-y-auto pr-1">
+        {txs.length === 0
+          ? <p className="text-sm text-gray-400 text-center py-8">{emptyText}</p>
+          : txs.map((t: any) => <TransactionCard key={t.transactionId} transaction={t} />)}
+      </div>
     </div>
   );
 }

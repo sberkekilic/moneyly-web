@@ -1,3 +1,4 @@
+// src/app/(main)/account/page.tsx
 'use client';
 
 import { useEffect, useState } from 'react';
@@ -5,12 +6,68 @@ import { useTransactionStore } from '@/store/transactionStore';
 import { useAuthStore } from '@/store/authStore';
 import { FirestoreService } from '@/services/firestoreService';
 import { formatAmount } from '@/lib/formatters';
-import { Plus, CreditCard, Wallet, ArrowLeft, Trash2, Inbox, Pencil } from 'lucide-react';
+import { Plus, CreditCard, Wallet, ArrowLeft, Trash2, Inbox, Pencil, Calendar } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import toast from 'react-hot-toast';
 import Link from 'next/link';
 import { AuthGuard } from '@/components/AuthGuard';
 import { useSettingsStore } from '@/store/settingsStore';
+
+// ── Date helpers ──────────────────────────────────────────
+
+/**
+ * Given a cutoff day-of-month and a reference date (defaults to today),
+ * returns the next cutoff date that is >= today.
+ *
+ * e.g. cutoffDay=3, today=May 15 → Jun 3
+ *      cutoffDay=3, today=May 2  → May 3
+ *      cutoffDay=3, today=May 3  → May 3  (inclusive)
+ */
+function computeNextCutoff(cutoffDay: number, today = new Date()): Date {
+  const y = today.getFullYear();
+  const m = today.getMonth(); // 0-based
+
+  // Try this month's cutoff
+  const thisMonthCutoff = new Date(y, m, cutoffDay);
+  if (today <= thisMonthCutoff) return thisMonthCutoff;
+
+  // Otherwise next month's cutoff
+  return new Date(y, m + 1, cutoffDay);
+}
+
+/**
+ * Returns the cutoff date of the current billing period
+ * (the most recent cutoff that has already passed or is today).
+ */
+function computeCurrentPeriodStart(cutoffDay: number, today = new Date()): Date {
+  const y = today.getFullYear();
+  const m = today.getMonth();
+
+  const thisMonthCutoff = new Date(y, m, cutoffDay);
+  if (today >= thisMonthCutoff) return thisMonthCutoff;
+
+  // Previous month
+  return new Date(y, m - 1, cutoffDay);
+}
+
+/**
+ * Due date = cutoffDay of the month AFTER the next cutoff
+ * e.g. nextCutoff = Jun 3 → dueDate = Jun 3 + 10 days grace = Jun 13
+ * (Turkish banks typically give 10 days; adjust GRACE_DAYS as needed)
+ */
+const GRACE_DAYS = 10;
+
+function computeDueDate(nextCutoff: Date): Date {
+  const d = new Date(nextCutoff);
+  d.setDate(d.getDate() + GRACE_DAYS);
+  return d;
+}
+
+function formatDateTR(date: Date): string {
+  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
+}
+
+// ─────────────────────────────────────────────────────────
 
 export default function AccountsPage() {
   const { bankDataList, loadAllData, isLoading } = useTransactionStore();
@@ -24,7 +81,11 @@ export default function AccountsPage() {
   }, []);
 
   const allAccounts = bankDataList.flatMap((bank: any) =>
-    (bank.accounts ?? []).map((acc: any) => ({ ...acc, bankId: bank.bankId, bankName: bank.bankName }))
+    (bank.accounts ?? []).map((acc: any) => ({
+      ...acc,
+      bankId: bank.bankId,
+      bankName: bank.bankName,
+    }))
   );
 
   const debitAccounts = allAccounts.filter(a => a.isDebit !== false);
@@ -39,21 +100,20 @@ export default function AccountsPage() {
       ...currentData,
       bankData: banks,
     });
-    // Force reload the store
     await loadAllData();
   };
 
   const handleUpdate = async (updatedAcc: any) => {
-  const updated = bankDataList.map((bank: any) => ({
-    ...bank,
-    accounts: bank.accounts?.map((a: any) => 
-      a.accountId === updatedAcc.accountId ? { ...a, ...updatedAcc } : a
-    ),
-  }));
-  await saveToFirebase(updated);
-  setEditingAccount(null);
-  toast.success('Hesap güncellendi');
-};
+    const updated = bankDataList.map((bank: any) => ({
+      ...bank,
+      accounts: bank.accounts?.map((a: any) =>
+        a.accountId === updatedAcc.accountId ? { ...a, ...updatedAcc } : a
+      ),
+    }));
+    await saveToFirebase(updated);
+    setEditingAccount(null);
+    toast.success('Hesap güncellendi');
+  };
 
   const handleDelete = async (acc: any) => {
     const updated = bankDataList.map((bank: any) => ({
@@ -85,27 +145,58 @@ export default function AccountsPage() {
             </Link>
             <h1 className="text-xl font-bold text-gray-900 dark:text-white">Hesaplarım</h1>
           </div>
-          <button onClick={() => setShowAddBank(true)} className="p-2 rounded-full hover:bg-blue-50 dark:hover:bg-blue-900/20">
+          <button
+            onClick={() => setShowAddBank(true)}
+            className="p-2 rounded-full hover:bg-blue-50 dark:hover:bg-blue-900/20"
+          >
             <Plus size={20} className="text-blue-500" />
           </button>
         </div>
 
         <div className="grid grid-cols-2 gap-3">
-          <SummaryCard label="Toplam Bakiye" amount={totalBalance} icon={<Wallet size={18} />} colorClass="text-green-600 bg-green-50 dark:bg-green-900/20" />
-          <SummaryCard label="Toplam Borç" amount={totalDebt} icon={<CreditCard size={18} />} colorClass="text-red-500 bg-red-50 dark:bg-red-900/20" />
+          <SummaryCard
+            label="Toplam Bakiye"
+            amount={totalBalance}
+            icon={<Wallet size={18} />}
+            colorClass="text-green-600 bg-green-50 dark:bg-green-900/20"
+          />
+          <SummaryCard
+            label="Toplam Borç"
+            amount={totalDebt}
+            icon={<CreditCard size={18} />}
+            colorClass="text-red-500 bg-red-50 dark:bg-red-900/20"
+          />
         </div>
 
         {debitAccounts.length > 0 && (
-          <AccountSection title="Banka Hesapları" accounts={debitAccounts} selectedId={selectedAccountId} onSelect={handleSelect} onDelete={handleDelete} onEdit={setEditingAccount} showCreditDetails={false} />
+          <AccountSection
+            title="Banka Hesapları"
+            accounts={debitAccounts}
+            selectedId={selectedAccountId}
+            onSelect={handleSelect}
+            onDelete={handleDelete}
+            onEdit={setEditingAccount}
+            showCreditDetails={false}
+          />
         )}
         {creditAccounts.length > 0 && (
-          <AccountSection title="Kredi Kartları" accounts={creditAccounts} selectedId={selectedAccountId} onSelect={handleSelect} onDelete={handleDelete} onEdit={setEditingAccount} showCreditDetails={true} />
+          <AccountSection
+            title="Kredi Kartları"
+            accounts={creditAccounts}
+            selectedId={selectedAccountId}
+            onSelect={handleSelect}
+            onDelete={handleDelete}
+            onEdit={setEditingAccount}
+            showCreditDetails={true}
+          />
         )}
 
         {allAccounts.length === 0 && (
           <div className="flex flex-col items-center py-16 bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700">
             <Inbox size={48} className="text-gray-300 dark:text-gray-600 mb-4" />
-            <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">Hesap bulunamadı</p>
+            <p className="text-sm font-medium text-gray-500 dark:text-gray-400 mb-1">
+              Hesap bulunamadı
+            </p>
             <p className="text-xs text-gray-400">+ butonuyla hesap ekleyin</p>
           </div>
         )}
@@ -121,13 +212,14 @@ export default function AccountsPage() {
             onClose={() => setShowAddBank(false)}
           />
         )}
+
         {editingAccount && (
-  <EditAccountModal
-    account={editingAccount}
-    onSave={handleUpdate}
-    onClose={() => setEditingAccount(null)}
-  />
-)}
+          <EditAccountModal
+            account={editingAccount}
+            onSave={handleUpdate}
+            onClose={() => setEditingAccount(null)}
+          />
+        )}
       </div>
     </AuthGuard>
   );
@@ -135,14 +227,17 @@ export default function AccountsPage() {
 
 // ── Summary Card ──────────────────────────────────────────
 
-interface SummaryCardProps {
+function SummaryCard({
+  label,
+  amount,
+  icon,
+  colorClass,
+}: {
   label: string;
   amount: number;
   icon: React.ReactNode;
   colorClass: string;
-}
-
-function SummaryCard({ label, amount, icon, colorClass }: SummaryCardProps) {
+}) {
   return (
     <div className={cn('rounded-2xl p-4', colorClass)}>
       <div className="flex items-center gap-2 mb-2">
@@ -156,16 +251,6 @@ function SummaryCard({ label, amount, icon, colorClass }: SummaryCardProps) {
 
 // ── Account Section ───────────────────────────────────────
 
-interface AccountSectionProps {
-  title: string;
-  accounts: any[];
-  selectedId: number | undefined;
-  onSelect: (acc: any) => void;
-  onDelete: (acc: any) => void;
-  onEdit: (acc: any) => void;
-  showCreditDetails: boolean;
-}
-
 function AccountSection({
   title,
   accounts,
@@ -174,186 +259,245 @@ function AccountSection({
   onDelete,
   onEdit,
   showCreditDetails,
-}: AccountSectionProps) {
+}: {
+  title: string;
+  accounts: any[];
+  selectedId: number | undefined;
+  onSelect: (acc: any) => void;
+  onDelete: (acc: any) => void;
+  onEdit: (acc: any) => void;
+  showCreditDetails: boolean;
+}) {
   return (
     <div className="space-y-3">
       <p className="text-xs font-bold text-gray-400 dark:text-gray-500 uppercase tracking-widest px-1">
         {title}
       </p>
       {accounts.map((acc: any) => (
-        <div
+        <AccountCard
           key={acc.accountId}
-          onClick={() => onSelect(acc)}
-          className={cn(
-            'bg-white dark:bg-gray-800 rounded-2xl border-2 p-4 cursor-pointer transition-all hover:shadow-md',
-            selectedId === acc.accountId
-              ? 'border-blue-500 dark:border-blue-400'
-              : 'border-gray-200 dark:border-gray-700'
-          )}
-        >
-          <div className="flex items-start gap-3">
-            {/* Icon */}
-            <div
-              className={cn(
-                'w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0',
-                acc.isDebit === false
-                  ? 'bg-purple-100 dark:bg-purple-900/30'
-                  : 'bg-green-100 dark:bg-green-900/30'
-              )}
-            >
-              {acc.isDebit === false ? (
-                <CreditCard size={18} className="text-purple-600" />
-              ) : (
-                <Wallet size={18} className="text-green-600" />
-              )}
-            </div>
-
-            {/* Info */}
-            <div className="flex-1 min-w-0">
-              <div className="flex items-start justify-between gap-2">
-                <div className="min-w-0">
-                  <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
-                    {acc.name}
-                  </p>
-                  <p className="text-xs text-gray-500 dark:text-gray-400">
-                    {acc.bankName} · {acc.type}
-                  </p>
-                </div>
-                <div className="text-right flex-shrink-0">
-                  <p className="text-sm font-bold text-gray-900 dark:text-white">
-                    {formatAmount(acc.balance ?? 0)} {acc.currency}
-                  </p>
-                  {selectedId === acc.accountId && (
-                    <span className="text-[10px] font-semibold text-blue-500 bg-blue-50 dark:bg-blue-900/20 px-1.5 py-0.5 rounded-md">
-                      Seçili
-                    </span>
-                  )}
-                </div>
-              </div>
-
-              {/* Credit Details */}
-{showCreditDetails && acc.isDebit === false && (
-  <div className="mt-3 space-y-2">
-    {/* Utilization bar */}
-    <div>
-      <div className="flex justify-between mb-1">
-        <span className="text-[10px] text-gray-400">Kullanım</span>
-        <span className="text-[10px] font-semibold text-gray-600 dark:text-gray-300">
-          %{acc.creditLimit > 0 ? Math.round(((acc.totalDebt ?? 0) / acc.creditLimit) * 100) : 0}
-        </span>
-      </div>
-      <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-1.5">
-        <div
-          className={cn(
-            'h-1.5 rounded-full transition-all',
-            ((acc.totalDebt ?? 0) / (acc.creditLimit || 1)) >= 0.8 ? 'bg-red-500' :
-            ((acc.totalDebt ?? 0) / (acc.creditLimit || 1)) >= 0.5 ? 'bg-orange-500' : 'bg-green-500'
-          )}
-          style={{ width: `${Math.min(((acc.totalDebt ?? 0) / (acc.creditLimit || 1)) * 100, 100)}%` }}
+          acc={acc}
+          isSelected={selectedId === acc.accountId}
+          onSelect={onSelect}
+          onDelete={onDelete}
+          onEdit={onEdit}
+          showCreditDetails={showCreditDetails}
         />
-      </div>
-    </div>
-
-    {/* 4-column grid */}
-    <div className="grid grid-cols-2 gap-2">
-      {[
-        { label: 'Limit', value: formatAmount(acc.creditLimit ?? 0) + ' ₺', color: 'text-blue-500' },
-        { label: 'Kullanılan', value: formatAmount(acc.totalDebt ?? 0) + ' ₺', color: 'text-red-500' },
-        { label: 'Kalan', value: formatAmount(acc.availableCredit ?? 0) + ' ₺', color: 'text-green-500' },
-        { label: 'Min Ödeme', value: formatAmount(acc.minPayment ?? 0) + ' ₺', color: 'text-orange-500' },
-      ].map((item) => (
-        <div key={item.label} className="bg-gray-50 dark:bg-gray-700 rounded-xl p-2">
-          <p className="text-[10px] text-gray-400">{item.label}</p>
-          <p className={cn('text-xs font-semibold', item.color)}>{item.value}</p>
-        </div>
-      ))}
-    </div>
-
-    {/* Period info */}
-    <div className="grid grid-cols-3 gap-2">
-      <div className="bg-gray-50 dark:bg-gray-700 rounded-xl p-2">
-        <p className="text-[10px] text-gray-400">Kesim</p>
-        <p className="text-xs font-semibold text-gray-900 dark:text-white">Her ayın {acc.cutoffDate || 1}'i</p>
-      </div>
-      {acc.nextCutoffDate && (
-        <div className="bg-gray-50 dark:bg-gray-700 rounded-xl p-2">
-          <p className="text-[10px] text-gray-400">Son Kesim</p>
-          <p className="text-xs font-semibold text-gray-900 dark:text-white">{acc.nextCutoffDate}</p>
-        </div>
-      )}
-      {acc.nextDueDate && (
-        <div className="bg-gray-50 dark:bg-gray-700 rounded-xl p-2">
-          <p className="text-[10px] text-gray-400">Son Ödeme</p>
-          <p className="text-xs font-semibold text-gray-900 dark:text-white">{acc.nextDueDate}</p>
-        </div>
-      )}
-    </div>
-
-    {/* Debt breakdown */}
-    {(acc.previousDebt > 0 || acc.remainingDebt > 0) && (
-      <div className="grid grid-cols-2 gap-2">
-        {acc.previousDebt > 0 && (
-          <div className="bg-orange-50 dark:bg-orange-900/10 rounded-xl p-2">
-            <p className="text-[10px] text-gray-400">Önceki Dönem</p>
-            <p className="text-xs font-semibold text-orange-600">{formatAmount(acc.previousDebt)} ₺</p>
-          </div>
-        )}
-        {acc.remainingDebt > 0 && (
-          <div className="bg-red-50 dark:bg-red-900/10 rounded-xl p-2">
-            <p className="text-[10px] text-gray-400">Dönem Borcu</p>
-            <p className="text-xs font-semibold text-red-600">{formatAmount(acc.remainingDebt)} ₺</p>
-          </div>
-        )}
-      </div>
-    )}
-
-    {/* Recent transactions count */}
-    <div className="flex items-center gap-2 text-[10px] text-gray-400">
-      <span>{(acc.transactions || []).length} işlem</span>
-      <span>·</span>
-      <span>{(acc.transactions || []).filter((t: any) => !t.isSurplus).length} gider</span>
-    </div>
-  </div>
-)}
-            </div>
-          </div>
-
-{/* Edit & Delete Buttons */}
-<div className="flex justify-end gap-2 mt-2">
-  <button
-    onClick={(e) => {
-      e.stopPropagation();
-      onEdit(acc);
-    }}
-    className="p-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-gray-400 hover:text-blue-500 transition-colors"
-  >
-    <Pencil size={13} />
-  </button>
-  <button
-    onClick={(e) => {
-      e.stopPropagation();
-      onDelete(acc);
-    }}
-    className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500 transition-colors"
-  >
-    <Trash2 size={13} />
-  </button>
-</div>
-        </div>
       ))}
     </div>
   );
 }
 
-// ── Edit Account Modal ─────────────────────────────────────
+// ── Account Card ──────────────────────────────────────────
 
-interface EditAccountModalProps {
+function AccountCard({
+  acc,
+  isSelected,
+  onSelect,
+  onDelete,
+  onEdit,
+  showCreditDetails,
+}: {
+  acc: any;
+  isSelected: boolean;
+  onSelect: (acc: any) => void;
+  onDelete: (acc: any) => void;
+  onEdit: (acc: any) => void;
+  showCreditDetails: boolean;
+}) {
+  const isCreditCard = acc.isDebit === false;
+
+  // ── Compute live cutoff / due dates ──
+  const today = new Date();
+  const cutoffDay = acc.cutoffDate || 1;
+  const nextCutoff = computeNextCutoff(cutoffDay, today);
+  const dueDate = computeDueDate(nextCutoff);
+
+  return (
+    <div
+      onClick={() => onSelect(acc)}
+      className={cn(
+        'bg-white dark:bg-gray-800 rounded-2xl border-2 p-4 cursor-pointer transition-all hover:shadow-md',
+        isSelected
+          ? 'border-blue-500 dark:border-blue-400'
+          : 'border-gray-200 dark:border-gray-700'
+      )}
+    >
+      <div className="flex items-start gap-3">
+        {/* Icon */}
+        <div
+          className={cn(
+            'w-10 h-10 rounded-full flex items-center justify-center flex-shrink-0',
+            isCreditCard
+              ? 'bg-purple-100 dark:bg-purple-900/30'
+              : 'bg-green-100 dark:bg-green-900/30'
+          )}
+        >
+          {isCreditCard ? (
+            <CreditCard size={18} className="text-purple-600" />
+          ) : (
+            <Wallet size={18} className="text-green-600" />
+          )}
+        </div>
+
+        {/* Info */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-start justify-between gap-2">
+            <div className="min-w-0">
+              <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+                {acc.name}
+              </p>
+              <p className="text-xs text-gray-500 dark:text-gray-400">
+                {acc.bankName} · {acc.type}
+              </p>
+            </div>
+            <div className="text-right flex-shrink-0">
+              <p className="text-sm font-bold text-gray-900 dark:text-white">
+                {formatAmount(acc.balance ?? 0)} {acc.currency}
+              </p>
+              {isSelected && (
+                <span className="text-[10px] font-semibold text-blue-500 bg-blue-50 dark:bg-blue-900/20 px-1.5 py-0.5 rounded-md">
+                  Seçili
+                </span>
+              )}
+            </div>
+          </div>
+
+          {/* Credit Details */}
+          {showCreditDetails && isCreditCard && (
+            <div className="mt-3 space-y-2">
+              {/* Utilization bar */}
+              <div>
+                <div className="flex justify-between mb-1">
+                  <span className="text-[10px] text-gray-400">Kullanım</span>
+                  <span className="text-[10px] font-semibold text-gray-600 dark:text-gray-300">
+                    %{acc.creditLimit > 0
+                      ? Math.round(((acc.totalDebt ?? 0) / acc.creditLimit) * 100)
+                      : 0}
+                  </span>
+                </div>
+                <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-1.5">
+                  <div
+                    className={cn(
+                      'h-1.5 rounded-full transition-all',
+                      ((acc.totalDebt ?? 0) / (acc.creditLimit || 1)) >= 0.8
+                        ? 'bg-red-500'
+                        : ((acc.totalDebt ?? 0) / (acc.creditLimit || 1)) >= 0.5
+                          ? 'bg-orange-500'
+                          : 'bg-green-500'
+                    )}
+                    style={{
+                      width: `${Math.min(
+                        ((acc.totalDebt ?? 0) / (acc.creditLimit || 1)) * 100,
+                        100
+                      )}%`,
+                    }}
+                  />
+                </div>
+              </div>
+
+              {/* 4-item grid */}
+              <div className="grid grid-cols-2 gap-2">
+                {[
+                  { label: 'Limit', value: formatAmount(acc.creditLimit ?? 0) + ' ₺', color: 'text-blue-500' },
+                  { label: 'Kullanılan', value: formatAmount(acc.totalDebt ?? 0) + ' ₺', color: 'text-red-500' },
+                  { label: 'Kalan', value: formatAmount(acc.availableCredit ?? 0) + ' ₺', color: 'text-green-500' },
+                  { label: 'Min Ödeme', value: formatAmount(acc.minPayment ?? 0) + ' ₺', color: 'text-orange-500' },
+                ].map((item) => (
+                  <div key={item.label} className="bg-gray-50 dark:bg-gray-700 rounded-xl p-2">
+                    <p className="text-[10px] text-gray-400">{item.label}</p>
+                    <p className={cn('text-xs font-semibold', item.color)}>{item.value}</p>
+                  </div>
+                ))}
+              </div>
+
+              {/* Period info — computed live from cutoffDay */}
+              <div className="grid grid-cols-3 gap-2">
+                <div className="bg-gray-50 dark:bg-gray-700 rounded-xl p-2">
+                  <p className="text-[10px] text-gray-400">Kesim Günü</p>
+                  <p className="text-xs font-semibold text-gray-900 dark:text-white">
+                    Her ayın {cutoffDay}'i
+                  </p>
+                </div>
+                <div className="bg-blue-50 dark:bg-blue-900/10 rounded-xl p-2">
+                  <p className="text-[10px] text-gray-400">Son Kesim</p>
+                  <p className="text-xs font-semibold text-blue-700 dark:text-blue-300">
+                    {formatDateTR(nextCutoff)}
+                  </p>
+                </div>
+                <div className="bg-orange-50 dark:bg-orange-900/10 rounded-xl p-2">
+                  <p className="text-[10px] text-gray-400">Son Ödeme</p>
+                  <p className="text-xs font-semibold text-orange-700 dark:text-orange-300">
+                    {formatDateTR(dueDate)}
+                  </p>
+                </div>
+              </div>
+
+              {/* Debt breakdown */}
+              {(acc.previousDebt > 0 || acc.remainingDebt > 0) && (
+                <div className="grid grid-cols-2 gap-2">
+                  {acc.previousDebt > 0 && (
+                    <div className="bg-orange-50 dark:bg-orange-900/10 rounded-xl p-2">
+                      <p className="text-[10px] text-gray-400">Önceki Dönem</p>
+                      <p className="text-xs font-semibold text-orange-600">
+                        {formatAmount(acc.previousDebt)} ₺
+                      </p>
+                    </div>
+                  )}
+                  {acc.remainingDebt > 0 && (
+                    <div className="bg-red-50 dark:bg-red-900/10 rounded-xl p-2">
+                      <p className="text-[10px] text-gray-400">Dönem Borcu</p>
+                      <p className="text-xs font-semibold text-red-600">
+                        {formatAmount(acc.remainingDebt)} ₺
+                      </p>
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {/* Transaction count */}
+              <div className="flex items-center gap-2 text-[10px] text-gray-400">
+                <span>{(acc.transactions || []).length} işlem</span>
+                <span>·</span>
+                <span>
+                  {(acc.transactions || []).filter((t: any) => !t.isSurplus).length} gider
+                </span>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Edit & Delete */}
+      <div className="flex justify-end gap-2 mt-2">
+        <button
+          onClick={(e) => { e.stopPropagation(); onEdit(acc); }}
+          className="p-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-gray-400 hover:text-blue-500 transition-colors"
+        >
+          <Pencil size={13} />
+        </button>
+        <button
+          onClick={(e) => { e.stopPropagation(); onDelete(acc); }}
+          className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500 transition-colors"
+        >
+          <Trash2 size={13} />
+        </button>
+      </div>
+    </div>
+  );
+}
+
+// ── Edit Account Modal ────────────────────────────────────
+
+function EditAccountModal({
+  account,
+  onSave,
+  onClose,
+}: {
   account: any;
   onSave: (acc: any) => void;
   onClose: () => void;
-}
-
-function EditAccountModal({ account, onSave, onClose }: EditAccountModalProps) {
+}) {
   const { language } = useSettingsStore();
   const lang = language || 'tr';
 
@@ -361,7 +505,7 @@ function EditAccountModal({ account, onSave, onClose }: EditAccountModalProps) {
   const [bankName, setBankName] = useState(account.bankName || '');
   const [balance, setBalance] = useState(String(account.balance ?? ''));
   const [creditLimit, setCreditLimit] = useState(String(account.creditLimit ?? ''));
-  const [cutoffDate, setCutoffDate] = useState(String(account.cutoffDate || '1'));
+  const [cutoffDay, setCutoffDay] = useState(String(account.cutoffDate ?? '1'));
   const [currency, setCurrency] = useState(account.currency || 'TRY');
 
   const isCreditCard = account.isDebit === false;
@@ -373,8 +517,8 @@ function EditAccountModal({ account, onSave, onClose }: EditAccountModalProps) {
     balance:    lang === 'tr' ? 'Bakiye' : 'Balance',
     currency:   lang === 'tr' ? 'Para Birimi' : 'Currency',
     limit:      lang === 'tr' ? 'Kredi Limiti' : 'Credit Limit',
-    cutoff:     lang === 'tr' ? 'Hesap Kesim Günü' : 'Cutoff Day',
-    cutoffSub:  lang === 'tr' ? 'Her ayın kaçıncı günü?' : 'Which day of the month?',
+    cutoff:     lang === 'tr' ? 'Kesim Günü (Bu Ay)' : 'Cutoff Day (This Month)',
+    cutoffSub:  lang === 'tr' ? 'Her ayın kaçıncı günü? (Banka değiştirebilir)' : 'Which day of the month? (Bank may change)',
     cancel:     lang === 'tr' ? 'İptal' : 'Cancel',
     save:       lang === 'tr' ? 'Güncelle' : 'Update',
     accType:    lang === 'tr' ? 'Hesap Türü' : 'Account Type',
@@ -384,19 +528,29 @@ function EditAccountModal({ account, onSave, onClose }: EditAccountModalProps) {
     available:  lang === 'tr' ? 'Kullanılabilir' : 'Available',
     txCount:    lang === 'tr' ? 'İşlem Sayısı' : 'Transactions',
     validation: lang === 'tr' ? 'Banka ve hesap adı girin' : 'Enter bank and account name',
+    nextCutoff: lang === 'tr' ? 'Sonraki Kesim' : 'Next Cutoff',
+    dueDate:    lang === 'tr' ? 'Son Ödeme' : 'Due Date',
+    graceDays:  lang === 'tr' ? `(+${GRACE_DAYS} gün vade)` : `(+${GRACE_DAYS} day grace)`,
   };
 
   const txCount = (account.transactions || []).length;
   const expenseCount = (account.transactions || []).filter((tx: any) => !tx.isSurplus).length;
+  const currentDebt = account.totalDebt ?? 0;
+  const newLimit = parseFloat(creditLimit) || 0;
+  const newAvailable = Math.max(newLimit - currentDebt, 0);
+  const usagePercent = newLimit > 0 ? (currentDebt / newLimit) * 100 : 0;
+
+  // Live date preview based on typed cutoffDay
+  const parsedCutoffDay = Math.min(Math.max(parseInt(cutoffDay) || 1, 1), 31);
+  const previewNextCutoff = computeNextCutoff(parsedCutoffDay);
+  const previewDueDate = computeDueDate(previewNextCutoff);
 
   const handleSave = () => {
     if (!name.trim() || !bankName.trim()) {
       toast.error(t.validation);
       return;
     }
-
-    const newLimit = isCreditCard ? (parseFloat(creditLimit) || 0) : undefined;
-    const currentDebt = account.totalDebt ?? 0;
+    const newLimitVal = isCreditCard ? (parseFloat(creditLimit) || 0) : undefined;
 
     onSave({
       accountId: account.accountId,
@@ -404,19 +558,12 @@ function EditAccountModal({ account, onSave, onClose }: EditAccountModalProps) {
       bankName: bankName.trim(),
       balance: parseFloat(balance) || 0,
       currency,
-      creditLimit: newLimit,
-      cutoffDate: isCreditCard ? (parseInt(cutoffDate) || 1) : account.cutoffDate,
-      availableCredit: newLimit !== undefined
-        ? Math.max(newLimit - currentDebt, 0)
-        : undefined,
+      creditLimit: newLimitVal,
+      cutoffDate: isCreditCard ? parsedCutoffDay : account.cutoffDate,
+      availableCredit:
+        newLimitVal !== undefined ? Math.max(newLimitVal - currentDebt, 0) : undefined,
     });
   };
-
-  // Preview calculations for credit cards
-  const newLimit = parseFloat(creditLimit) || 0;
-  const currentDebt = account.totalDebt ?? 0;
-  const newAvailable = Math.max(newLimit - currentDebt, 0);
-  const usagePercent = newLimit > 0 ? (currentDebt / newLimit) * 100 : 0;
 
   return (
     <div
@@ -427,19 +574,16 @@ function EditAccountModal({ account, onSave, onClose }: EditAccountModalProps) {
         className="bg-white dark:bg-gray-900 rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto shadow-2xl"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* ── Header ── */}
+        {/* Header */}
         <div className="flex items-center justify-between p-6 border-b border-gray-100 dark:border-gray-700">
           <div className="flex items-center gap-3">
             <div className={cn(
               'w-10 h-10 rounded-xl flex items-center justify-center',
-              isCreditCard
-                ? 'bg-purple-100 dark:bg-purple-900/30'
-                : 'bg-green-100 dark:bg-green-900/30'
+              isCreditCard ? 'bg-purple-100 dark:bg-purple-900/30' : 'bg-green-100 dark:bg-green-900/30'
             )}>
               {isCreditCard
                 ? <CreditCard size={18} className="text-purple-600" />
-                : <Wallet size={18} className="text-green-600" />
-              }
+                : <Wallet size={18} className="text-green-600" />}
             </div>
             <div>
               <h3 className="text-lg font-bold text-gray-900 dark:text-white">{t.title}</h3>
@@ -456,7 +600,7 @@ function EditAccountModal({ account, onSave, onClose }: EditAccountModalProps) {
           </button>
         </div>
 
-        {/* ── Current Status (read-only) ── */}
+        {/* Current Status */}
         {isCreditCard && (
           <div className="px-6 pt-4">
             <div className="bg-gray-50 dark:bg-gray-800 rounded-xl p-4 space-y-3">
@@ -470,20 +614,23 @@ function EditAccountModal({ account, onSave, onClose }: EditAccountModalProps) {
                 </div>
                 <div className="text-center">
                   <p className="text-[10px] text-gray-400">{t.available}</p>
-                  <p className="text-sm font-bold text-green-500">{formatAmount(account.availableCredit ?? 0)}₺</p>
+                  <p className="text-sm font-bold text-green-500">
+                    {formatAmount(account.availableCredit ?? 0)}₺
+                  </p>
                 </div>
                 <div className="text-center">
                   <p className="text-[10px] text-gray-400">{t.txCount}</p>
-                  <p className="text-sm font-bold text-gray-900 dark:text-white">{expenseCount}/{txCount}</p>
+                  <p className="text-sm font-bold text-gray-900 dark:text-white">
+                    {expenseCount}/{txCount}
+                  </p>
                 </div>
               </div>
             </div>
           </div>
         )}
 
-        {/* ── Form Fields ── */}
+        {/* Form */}
         <div className="p-6 space-y-4">
-          {/* Bank & Account Name — side by side on desktop */}
           <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
             <div>
               <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5 block">
@@ -509,7 +656,6 @@ function EditAccountModal({ account, onSave, onClose }: EditAccountModalProps) {
             </div>
           </div>
 
-          {/* Balance & Currency — side by side */}
           {!isCreditCard && (
             <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
               <div>
@@ -541,7 +687,6 @@ function EditAccountModal({ account, onSave, onClose }: EditAccountModalProps) {
             </div>
           )}
 
-          {/* Credit Card Fields */}
           {isCreditCard && (
             <>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
@@ -559,7 +704,7 @@ function EditAccountModal({ account, onSave, onClose }: EditAccountModalProps) {
                   />
                 </div>
 
-                {/* Cutoff Day */}
+                {/* Cutoff Day — editable every time */}
                 <div>
                   <label className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1.5 block">
                     {t.cutoff}
@@ -568,8 +713,8 @@ function EditAccountModal({ account, onSave, onClose }: EditAccountModalProps) {
                     type="number"
                     min="1"
                     max="31"
-                    value={cutoffDate}
-                    onChange={(e) => setCutoffDate(e.target.value)}
+                    value={cutoffDay}
+                    onChange={(e) => setCutoffDay(e.target.value)}
                     placeholder="1"
                     className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500 transition-colors"
                   />
@@ -577,14 +722,40 @@ function EditAccountModal({ account, onSave, onClose }: EditAccountModalProps) {
                 </div>
               </div>
 
-              {/* Live Preview — shows what will happen after save */}
+              {/* Live date preview — updates as user types */}
+              <div className="bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded-xl p-4">
+                <div className="flex items-center gap-2 mb-3">
+                  <Calendar size={14} className="text-blue-500" />
+                  <p className="text-xs font-bold text-blue-700 dark:text-blue-400">
+                    {lang === 'tr' ? 'Tarih Önizlemesi' : 'Date Preview'}
+                  </p>
+                </div>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-white dark:bg-gray-800 rounded-lg p-3">
+                    <p className="text-[10px] text-gray-400 mb-1">{t.nextCutoff}</p>
+                    <p className="text-sm font-bold text-blue-600 dark:text-blue-400">
+                      {formatDateTR(previewNextCutoff)}
+                    </p>
+                    <p className="text-[10px] text-gray-400 mt-1">
+                      {lang === 'tr' ? `Her ayın ${parsedCutoffDay}'i` : `Day ${parsedCutoffDay} of each month`}
+                    </p>
+                  </div>
+                  <div className="bg-white dark:bg-gray-800 rounded-lg p-3">
+                    <p className="text-[10px] text-gray-400 mb-1">{t.dueDate}</p>
+                    <p className="text-sm font-bold text-orange-600 dark:text-orange-400">
+                      {formatDateTR(previewDueDate)}
+                    </p>
+                    <p className="text-[10px] text-gray-400 mt-1">{t.graceDays}</p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Limit preview */}
               {creditLimit && (
                 <div className="bg-purple-50 dark:bg-purple-900/10 border border-purple-200 dark:border-purple-800 rounded-xl p-4 space-y-3">
                   <p className="text-xs font-bold text-purple-700 dark:text-purple-400">
-                    {lang === 'tr' ? 'Önizleme' : 'Preview'}
+                    {lang === 'tr' ? 'Limit Önizlemesi' : 'Limit Preview'}
                   </p>
-
-                  {/* Usage bar */}
                   <div>
                     <div className="flex justify-between text-xs mb-1">
                       <span className="text-purple-600 dark:text-purple-400">
@@ -605,7 +776,6 @@ function EditAccountModal({ account, onSave, onClose }: EditAccountModalProps) {
                       />
                     </div>
                   </div>
-
                   <div className="grid grid-cols-3 gap-2">
                     <div className="text-center">
                       <p className="text-[10px] text-purple-500">{t.limit}</p>
@@ -626,15 +796,11 @@ function EditAccountModal({ account, onSave, onClose }: EditAccountModalProps) {
                       </p>
                     </div>
                   </div>
-
-                  {/* Warning if limit < debt */}
                   {newLimit < currentDebt && newLimit > 0 && (
                     <div className="flex items-center gap-2 text-xs text-red-600 dark:text-red-400 bg-red-50 dark:bg-red-900/20 rounded-lg p-2">
                       <span>⚠️</span>
                       <span>
-                        {lang === 'tr'
-                          ? 'Limit mevcut borçtan düşük!'
-                          : 'Limit is lower than current debt!'}
+                        {lang === 'tr' ? 'Limit mevcut borçtan düşük!' : 'Limit is lower than current debt!'}
                       </span>
                     </div>
                   )}
@@ -644,7 +810,7 @@ function EditAccountModal({ account, onSave, onClose }: EditAccountModalProps) {
           )}
         </div>
 
-        {/* ── Actions ── */}
+        {/* Actions */}
         <div className="flex gap-3 p-6 pt-0">
           <button
             onClick={onClose}
@@ -666,18 +832,24 @@ function EditAccountModal({ account, onSave, onClose }: EditAccountModalProps) {
 
 // ── Add Bank Modal ────────────────────────────────────────
 
-interface AddBankModalProps {
+function AddBankModal({
+  onSave,
+  onClose,
+}: {
   onSave: (bank: any) => void;
   onClose: () => void;
-}
-
-function AddBankModal({ onSave, onClose }: AddBankModalProps) {
+}) {
   const [bankName, setBankName] = useState('');
   const [accountName, setAccountName] = useState('');
   const [accountType, setAccountType] = useState<'debit' | 'credit'>('debit');
   const [balance, setBalance] = useState('');
   const [creditLimit, setCreditLimit] = useState('');
-  const [cutoffDate, setCutoffDate] = useState('1');
+  const [cutoffDay, setCutoffDay] = useState('1');
+
+  // Live preview for new card too
+  const parsedCutoffDay = Math.min(Math.max(parseInt(cutoffDay) || 1, 1), 31);
+  const previewNextCutoff = computeNextCutoff(parsedCutoffDay);
+  const previewDueDate = computeDueDate(previewNextCutoff);
 
   const handleSave = () => {
     if (!bankName.trim() || !accountName.trim()) {
@@ -698,7 +870,7 @@ function AddBankModal({ onSave, onClose }: AddBankModalProps) {
       debts: [],
       currency: 'TRY',
       isDebit,
-      cutoffDate: parseInt(cutoffDate) || 1,
+      cutoffDate: parsedCutoffDay,
     };
 
     if (!isDebit) {
@@ -725,33 +897,16 @@ function AddBankModal({ onSave, onClose }: AddBankModalProps) {
         className="bg-white dark:bg-gray-900 rounded-t-3xl p-6 w-full max-w-md space-y-4 max-h-[90vh] overflow-y-auto"
         onClick={(e) => e.stopPropagation()}
       >
-        {/* Handle */}
         <div className="w-10 h-1 bg-gray-300 dark:bg-gray-600 rounded-full mx-auto" />
-
         <h3 className="text-lg font-bold text-gray-900 dark:text-white">Hesap Ekle</h3>
 
         <div className="space-y-3">
-          {/* Bank Name */}
-          <Field
-            label="Banka Adı *"
-            value={bankName}
-            onChange={setBankName}
-            placeholder="Örn: Ziraat Bankası"
-          />
-
-          {/* Account Name */}
-          <Field
-            label="Hesap Adı *"
-            value={accountName}
-            onChange={setAccountName}
-            placeholder="Örn: Vadesiz Hesap"
-          />
+          <Field label="Banka Adı *" value={bankName} onChange={setBankName} placeholder="Örn: Ziraat Bankası" />
+          <Field label="Hesap Adı *" value={accountName} onChange={setAccountName} placeholder="Örn: Vadesiz Hesap" />
 
           {/* Account Type */}
           <div>
-            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2">
-              Hesap Türü
-            </p>
+            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2">Hesap Türü</p>
             <div className="flex gap-2">
               {(['debit', 'credit'] as const).map((type) => (
                 <button
@@ -766,41 +921,18 @@ function AddBankModal({ onSave, onClose }: AddBankModalProps) {
                       : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400'
                   )}
                 >
-                  {type === 'debit' ? (
-                    <>
-                      <Wallet size={14} />
-                      Banka
-                    </>
-                  ) : (
-                    <>
-                      <CreditCard size={14} />
-                      Kredi
-                    </>
-                  )}
+                  {type === 'debit' ? <><Wallet size={14} /> Banka</> : <><CreditCard size={14} /> Kredi</>}
                 </button>
               ))}
             </div>
           </div>
 
-          {/* Balance */}
-          <Field
-            label="Bakiye"
-            value={balance}
-            onChange={setBalance}
-            placeholder="0.00"
-            type="number"
-          />
+          <Field label="Bakiye" value={balance} onChange={setBalance} placeholder="0.00" type="number" />
 
-          {/* Credit-only fields */}
           {accountType === 'credit' && (
             <>
-              <Field
-                label="Kredi Limiti"
-                value={creditLimit}
-                onChange={setCreditLimit}
-                placeholder="0.00"
-                type="number"
-              />
+              <Field label="Kredi Limiti" value={creditLimit} onChange={setCreditLimit} placeholder="0.00" type="number" />
+
               <div>
                 <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">
                   Kesim Günü (1-31)
@@ -809,16 +941,33 @@ function AddBankModal({ onSave, onClose }: AddBankModalProps) {
                   type="number"
                   min="1"
                   max="31"
-                  value={cutoffDate}
-                  onChange={(e) => setCutoffDate(e.target.value)}
+                  value={cutoffDay}
+                  onChange={(e) => setCutoffDay(e.target.value)}
                   className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
                 />
+              </div>
+
+              {/* Live date preview */}
+              <div className="bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded-xl p-3">
+                <div className="flex items-center gap-2 mb-2">
+                  <Calendar size={13} className="text-blue-500" />
+                  <p className="text-xs font-bold text-blue-700 dark:text-blue-400">Tarih Önizlemesi</p>
+                </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <div className="bg-white dark:bg-gray-800 rounded-lg p-2">
+                    <p className="text-[10px] text-gray-400">Sonraki Kesim</p>
+                    <p className="text-xs font-bold text-blue-600">{formatDateTR(previewNextCutoff)}</p>
+                  </div>
+                  <div className="bg-white dark:bg-gray-800 rounded-lg p-2">
+                    <p className="text-[10px] text-gray-400">Son Ödeme</p>
+                    <p className="text-xs font-bold text-orange-600">{formatDateTR(previewDueDate)}</p>
+                  </div>
+                </div>
               </div>
             </>
           )}
         </div>
 
-        {/* Actions */}
         <div className="flex gap-3 pt-2">
           <button
             onClick={onClose}
@@ -838,17 +987,21 @@ function AddBankModal({ onSave, onClose }: AddBankModalProps) {
   );
 }
 
-// ── Field Component ───────────────────────────────────────
+// ── Field ─────────────────────────────────────────────────
 
-interface FieldProps {
+function Field({
+  label,
+  value,
+  onChange,
+  placeholder,
+  type = 'text',
+}: {
   label: string;
   value: string;
-  onChange: (value: string) => void;
+  onChange: (v: string) => void;
   placeholder: string;
   type?: string;
-}
-
-function Field({ label, value, onChange, placeholder, type = 'text' }: FieldProps) {
+}) {
   return (
     <div>
       <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">{label}</p>
