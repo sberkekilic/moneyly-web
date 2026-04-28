@@ -24,6 +24,28 @@ const CATEGORY_COLORS = [
   '#EF4444', '#22C55E', '#6366F1', '#EC4899',
 ];
 
+// Currency symbol map
+const CURRENCY_SYMBOLS: Record<string, string> = {
+  TRY: '₺',
+  EUR: '€',
+  USD: '$',
+  GBP: '£',
+};
+
+function getCurrencySymbol(currency: string): string {
+  return CURRENCY_SYMBOLS[currency] ?? currency;
+}
+
+// Groups totals by currency: { TRY: 1500, EUR: 200 }
+function getTotalsByCurrency(transactions: Transaction[]): Record<string, number> {
+  const totals: Record<string, number> = {};
+  transactions.forEach((tx) => {
+    const cur = tx.currency || 'TRY';
+    totals[cur] = (totals[cur] ?? 0) + tx.amount;
+  });
+  return totals;
+}
+
 export default function OutcomePage() {
   const { loadAllData, deleteTransaction, bankDataList } = useTransactionStore();
   const user = useAuthStore((s) => s.user);
@@ -61,6 +83,7 @@ export default function OutcomePage() {
     bank:          lang === 'tr' ? '(Banka)' : '(Bank)',
     topCategories: lang === 'tr' ? 'En Çok Harcanan' : 'Top Spending',
     tx:            lang === 'tr' ? 'işlem' : 'transactions',
+    byCurrency:    lang === 'tr' ? 'Para Birimine Göre' : 'By Currency',
   };
 
   useEffect(() => {
@@ -123,24 +146,31 @@ export default function OutcomePage() {
   };
 
   const grouped = getGrouped();
-  const totalAmount = Object.values(grouped).reduce(
-    (total, subMap) =>
-      total +
-      Object.values(subMap).reduce(
-        (s, txs) => s + txs.reduce((st, tx) => st + tx.amount, 0),
-        0
-      ),
-    0
+
+  // All expense transactions (flat)
+  const allExpenseTxs: Transaction[] = Object.values(grouped).flatMap((subMap) =>
+    Object.values(subMap).flat()
   );
 
-  // Top categories for summary
+  // Totals grouped by currency
+  const totalsByCurrency = getTotalsByCurrency(allExpenseTxs);
+
+  // Primary total (TRY fallback) — used for percentage calculations in category bars
+  const primaryCurrency = Object.keys(totalsByCurrency).includes('TRY')
+    ? 'TRY'
+    : (Object.keys(totalsByCurrency)[0] ?? 'TRY');
+  const primaryTotal = totalsByCurrency[primaryCurrency] ?? 0;
+
+  // Top categories (based on primary currency only, for the summary strip)
   const topCategories = Object.entries(grouped)
     .map(([cat, subMap]) => ({
       name: cat,
-      total: Object.values(subMap).reduce((s, txs) => s + txs.reduce((st, tx) => st + tx.amount, 0), 0),
+      totalsByCurrency: getTotalsByCurrency(
+        Object.values(subMap).flat()
+      ),
       count: Object.values(subMap).reduce((s, txs) => s + txs.length, 0),
     }))
-    .sort((a, b) => b.total - a.total)
+    .sort((a, b) => (b.totalsByCurrency[primaryCurrency] ?? 0) - (a.totalsByCurrency[primaryCurrency] ?? 0))
     .slice(0, 5);
 
   const handleDelete = async (tx: Transaction) => {
@@ -254,43 +284,76 @@ export default function OutcomePage() {
             </div>
           )}
 
-          {/* Total Card */}
+          {/* Total Card — now shows per-currency totals */}
           <div className="lg:col-span-3 bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-5">
-            <div className="flex items-center justify-between mb-4">
-              <div>
-                <div className="flex items-center gap-2 mb-1">
+            <div className="flex items-start justify-between mb-4">
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-3">
                   <TrendingDown size={18} className="text-red-500" />
                   <span className="text-sm text-gray-500 dark:text-gray-400">
-                    {selectedAccount ? `${selectedAccount.name} — ${t.totalExpense}` : t.totalExpense}
+                    {selectedAccount
+                      ? `${selectedAccount.name} — ${t.totalExpense}`
+                      : t.totalExpense}
                   </span>
                 </div>
-                <p className="text-4xl font-bold text-gray-900 dark:text-white tracking-tight">
-                  {formatAmount(totalAmount)} ₺
-                </p>
-                {totalAmount === 0 && selectedAccount && (
+
+                {/* ── Per-currency totals ── */}
+                {Object.keys(totalsByCurrency).length === 0 ? (
+                  <p className="text-4xl font-bold text-gray-900 dark:text-white tracking-tight">
+                    {formatAmount(0)} ₺
+                  </p>
+                ) : (
+                  <div className="flex flex-col gap-2">
+                    {Object.entries(totalsByCurrency).map(([currency, amount]) => (
+                      <div key={currency} className="flex items-baseline gap-2">
+                        <p className="text-3xl font-bold text-gray-900 dark:text-white tracking-tight">
+                          {formatAmount(amount)}
+                        </p>
+                        <span className="text-lg font-semibold text-gray-500 dark:text-gray-400">
+                          {getCurrencySymbol(currency)}
+                        </span>
+                        {Object.keys(totalsByCurrency).length > 1 && (
+                          <span className="text-xs font-medium text-gray-400 bg-gray-100 dark:bg-gray-700 px-1.5 py-0.5 rounded">
+                            {currency}
+                          </span>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {Object.keys(totalsByCurrency).length === 0 && selectedAccount && (
                   <p className="text-xs text-gray-400 mt-1">{t.noExpenses}</p>
                 )}
               </div>
-              <div className="p-4 bg-red-50 dark:bg-red-900/20 rounded-2xl">
+
+              <div className="p-4 bg-red-50 dark:bg-red-900/20 rounded-2xl flex-shrink-0 ml-4">
                 <Receipt size={32} className="text-red-500" />
               </div>
             </div>
 
+            {/* Top categories strip */}
             {topCategories.length > 0 && (
               <div className="border-t border-gray-100 dark:border-gray-700 pt-3 mt-3">
                 <p className="text-xs font-semibold text-gray-400 mb-2">{t.topCategories}</p>
                 <div className="flex flex-wrap gap-2">
-                  {topCategories.map(({ name, total }, idx) => {
+                  {topCategories.map(({ name, totalsByCurrency: catCurrencies }, idx) => {
                     const color = CATEGORY_COLORS[idx % CATEGORY_COLORS.length];
+                    // Show all currencies for this category
+                    const currencyEntries = Object.entries(catCurrencies);
                     return (
                       <div
                         key={name}
                         className="flex items-center gap-2 px-3 py-1.5 rounded-lg border border-gray-100 dark:border-gray-700 bg-gray-50 dark:bg-gray-700/50"
                       >
                         <div className="w-2 h-2 rounded-full" style={{ backgroundColor: color }} />
-                        <span className="text-xs font-medium text-gray-700 dark:text-gray-300">{name}</span>
+                        <span className="text-xs font-medium text-gray-700 dark:text-gray-300">
+                          {name}
+                        </span>
                         <span className="text-xs font-bold text-gray-900 dark:text-white">
-                          {formatAmount(total)}₺
+                          {currencyEntries
+                            .map(([cur, amt]) => `${formatAmount(amt)}${getCurrencySymbol(cur)}`)
+                            .join(' + ')}
                         </span>
                       </div>
                     );
@@ -304,10 +367,11 @@ export default function OutcomePage() {
         {/* ── Category Distribution + Transaction Groups ── */}
         {Object.keys(grouped).length > 0 ? (
           <>
-            {/* Category Progress Bars — 2 columns on desktop */}
-            <CategoryProgressBars grouped={grouped} totalAmount={totalAmount} t={t} />
-
-            {/* Transaction Groups */}
+            <CategoryProgressBars
+              grouped={grouped}
+              primaryCurrency={primaryCurrency}
+              t={t}
+            />
             <TransactionGroups
               grouped={grouped}
               onDelete={handleDelete}
@@ -319,7 +383,7 @@ export default function OutcomePage() {
           <EmptyState hasAccount={!!selectedAccount} t={t} />
         )}
 
-        {/* ── FAB — mobile only (desktop has inline button in header) ── */}
+        {/* ── FAB ── */}
         <button
           onClick={() => setShowAddModal(true)}
           className="lg:hidden fixed bottom-24 right-4 flex items-center gap-2 bg-blue-500 hover:bg-blue-600 text-white px-5 py-3 rounded-2xl shadow-lg transition-all font-semibold text-sm z-40"
@@ -328,7 +392,6 @@ export default function OutcomePage() {
           {t.addTx}
         </button>
 
-        {/* ── Add Modal ── */}
         {showAddModal && selectedAccount && (
           <AddTransactionModal
             accounts={bankDataList}
@@ -338,7 +401,6 @@ export default function OutcomePage() {
           />
         )}
 
-        {/* ── Edit Modal — simplified onClose ── */}
         {editingTx && selectedAccount && (
           <EditTransactionModal
             transaction={editingTx}
@@ -361,14 +423,19 @@ export default function OutcomePage() {
 
 function CategoryProgressBars({
   grouped,
-  totalAmount,
+  primaryCurrency,
   t,
 }: {
-  grouped: any;
-  totalAmount: number;
+  grouped: Record<string, Record<string, Transaction[]>>;
+  primaryCurrency: string;
   t: any;
 }) {
   const categories = Object.entries(grouped) as [string, Record<string, Transaction[]>][];
+
+  // Total per currency across all categories
+  const allTxs = categories.flatMap(([, subMap]) => Object.values(subMap).flat());
+  const grandTotalsByCurrency = getTotalsByCurrency(allTxs);
+  const primaryGrandTotal = grandTotalsByCurrency[primaryCurrency] ?? 0;
 
   return (
     <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-5">
@@ -379,12 +446,14 @@ function CategoryProgressBars({
 
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {categories.map(([cat, subMap], idx) => {
-          const catTotal = Object.values(subMap).reduce(
-            (s, txs) => s + txs.reduce((st, tx) => st + tx.amount, 0), 0
-          );
-          const percent = totalAmount > 0 ? catTotal / totalAmount : 0;
+          const flatTxs = Object.values(subMap).flat();
+          const catCurrencies = getTotalsByCurrency(flatTxs);
+          const catPrimaryTotal = catCurrencies[primaryCurrency] ?? 0;
+
+          // Percentage is based on primary currency only
+          const percent = primaryGrandTotal > 0 ? catPrimaryTotal / primaryGrandTotal : 0;
           const color = CATEGORY_COLORS[idx % CATEGORY_COLORS.length];
-          const txCount = Object.values(subMap).reduce((s, txs) => s + txs.length, 0);
+          const txCount = flatTxs.length;
 
           return (
             <div
@@ -407,15 +476,26 @@ function CategoryProgressBars({
               <div className="w-full bg-gray-200 dark:bg-gray-600 rounded-full h-2">
                 <div
                   className="h-2 rounded-full transition-all duration-500"
-                  style={{ width: `${(percent * 100).toFixed(0)}%`, backgroundColor: color }}
+                  style={{
+                    width: `${(percent * 100).toFixed(0)}%`,
+                    backgroundColor: color,
+                  }}
                 />
               </div>
 
               <div className="flex items-center justify-between">
                 <span className="text-xs text-gray-500">{txCount} {t.tx}</span>
-                <span className="text-sm font-bold text-gray-900 dark:text-white">
-                  {formatAmount(catTotal)} ₺
-                </span>
+                {/* Show each currency total separately */}
+                <div className="flex flex-col items-end gap-0.5">
+                  {Object.entries(catCurrencies).map(([cur, amt]) => (
+                    <span
+                      key={cur}
+                      className="text-sm font-bold text-gray-900 dark:text-white tabular-nums"
+                    >
+                      {formatAmount(amt)}{getCurrencySymbol(cur)}
+                    </span>
+                  ))}
+                </div>
               </div>
             </div>
           );
@@ -438,22 +518,19 @@ function TransactionGroups({
   onEdit: (tx: Transaction) => void;
   t: any;
 }) {
-  // ── FIX: Initialize ALL categories as open ──
   const categoryKeys = Object.keys(grouped);
   const [expanded, setExpanded] = useState<Record<string, boolean>>(
     () => Object.fromEntries(categoryKeys.map((k) => [k, true]))
   );
-  const [expandedSub, setExpandedSub] = useState<Record<string, boolean>>(
-    () => {
-      const initial: Record<string, boolean> = {};
-      Object.entries(grouped).forEach(([cat, subMap]) => {
-        Object.keys(subMap).forEach((sub) => {
-          initial[`${cat}_${sub}`] = true;
-        });
+  const [expandedSub, setExpandedSub] = useState<Record<string, boolean>>(() => {
+    const initial: Record<string, boolean> = {};
+    Object.entries(grouped).forEach(([cat, subMap]) => {
+      Object.keys(subMap).forEach((sub) => {
+        initial[`${cat}_${sub}`] = true;
       });
-      return initial;
-    }
-  );
+    });
+    return initial;
+  });
 
   useEffect(() => {
     setExpanded((prev) => {
@@ -463,7 +540,6 @@ function TransactionGroups({
       });
       return next;
     });
-
     setExpandedSub((prev) => {
       const next = { ...prev };
       Object.entries(grouped).forEach(([cat, subMap]) => {
@@ -486,11 +562,15 @@ function TransactionGroups({
         {Object.entries(grouped).map(([cat, subMap]) => {
           const catIdx = Object.keys(grouped).indexOf(cat);
           const color = CATEGORY_COLORS[catIdx % CATEGORY_COLORS.length];
-          const txCount = Object.values(subMap).reduce((s, l) => s + l.length, 0);
-          const catTotal = Object.values(subMap).reduce(
-            (s, txs) => s + txs.reduce((st, tx) => st + tx.amount, 0), 0
-          );
+          const flatTxs = Object.values(subMap).flat();
+          const txCount = flatTxs.length;
+          const catCurrencies = getTotalsByCurrency(flatTxs);
           const isOpen = expanded[cat] ?? true;
+
+          // Summary label: "1500₺ + 200€"
+          const catSummary = Object.entries(catCurrencies)
+            .map(([cur, amt]) => `${formatAmount(amt)}${getCurrencySymbol(cur)}`)
+            .join(' + ');
 
           return (
             <div
@@ -502,7 +582,7 @@ function TransactionGroups({
                 className="w-full flex items-center gap-3 p-4 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
               >
                 <div
-                  className="w-10 h-10 rounded-xl flex items-center justify-center"
+                  className="w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0"
                   style={{ backgroundColor: color + '15' }}
                 >
                   <Folder size={18} style={{ color }} />
@@ -510,13 +590,13 @@ function TransactionGroups({
                 <div className="flex-1 min-w-0">
                   <p className="text-sm font-bold text-gray-900 dark:text-white">{cat}</p>
                   <p className="text-xs text-gray-500 dark:text-gray-400">
-                    {txCount} {t.tx} · {formatAmount(catTotal)} ₺
+                    {txCount} {t.tx} · {catSummary}
                   </p>
                 </div>
                 <ChevronRight
                   size={16}
                   className={cn(
-                    'text-gray-400 transition-transform duration-200',
+                    'text-gray-400 transition-transform duration-200 flex-shrink-0',
                     isOpen && 'rotate-90'
                   )}
                 />
@@ -526,7 +606,10 @@ function TransactionGroups({
                 Object.entries(subMap).map(([sub, txs]) => {
                   const subKey = `${cat}_${sub}`;
                   const isSubOpen = expandedSub[subKey] ?? true;
-                  const subTotal = txs.reduce((s, tx) => s + tx.amount, 0);
+                  const subCurrencies = getTotalsByCurrency(txs);
+                  const subSummary = Object.entries(subCurrencies)
+                    .map(([cur, amt]) => `${formatAmount(amt)}${getCurrencySymbol(cur)}`)
+                    .join(' + ');
 
                   return (
                     <div key={sub} className="border-t border-gray-100 dark:border-gray-700">
@@ -536,17 +619,17 @@ function TransactionGroups({
                         }
                         className="w-full flex items-center gap-3 px-4 py-3 text-left hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
                       >
-                        <Tag size={14} className="text-blue-500 ml-4" />
+                        <Tag size={14} className="text-blue-500 ml-4 flex-shrink-0" />
                         <span className="flex-1 text-sm font-medium text-gray-800 dark:text-gray-200">
                           {sub}
                         </span>
                         <span className="text-xs text-gray-500 mr-1">
-                          {txs.length} · {formatAmount(subTotal)}₺
+                          {txs.length} · {subSummary}
                         </span>
                         <ChevronRight
                           size={14}
                           className={cn(
-                            'text-gray-400 transition-transform duration-200',
+                            'text-gray-400 transition-transform duration-200 flex-shrink-0',
                             isSubOpen && 'rotate-90'
                           )}
                         />
@@ -554,7 +637,10 @@ function TransactionGroups({
 
                       {isSubOpen &&
                         txs
-                          .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+                          .sort(
+                            (a, b) =>
+                              new Date(b.date).getTime() - new Date(a.date).getTime()
+                          )
                           .map((tx) => (
                             <TransactionTile
                               key={tx.transactionId}
@@ -583,7 +669,7 @@ function TransactionTile({
 }: {
   tx: Transaction;
   onDelete: (tx: Transaction) => void;
-  onEdit: (tx: Transaction) => void;  // ← new
+  onEdit: (tx: Transaction) => void;
 }) {
   return (
     <div className="flex items-center gap-3 px-4 py-3 border-t border-gray-50 dark:border-gray-700/50 bg-gray-50/50 dark:bg-gray-700/20 hover:bg-gray-100/50 dark:hover:bg-gray-600/20 transition-colors group">
@@ -614,13 +700,12 @@ function TransactionTile({
         </div>
       </div>
 
+      {/* Amount with proper currency symbol */}
       <p className="text-sm font-bold text-red-500 flex-shrink-0 tabular-nums">
-        {formatAmount(tx.amount)} {tx.currency}
+        {formatAmount(tx.amount)} {getCurrencySymbol(tx.currency || 'TRY')}
       </p>
 
-      {/* ── Action Buttons (visible on hover on desktop, always on mobile) ── */}
       <div className="flex items-center gap-1 flex-shrink-0">
-        {/* Edit button */}
         <button
           onClick={() => onEdit(tx)}
           className="p-1.5 rounded-lg hover:bg-blue-50 dark:hover:bg-blue-900/20 text-gray-400 hover:text-blue-500 transition-colors opacity-100 md:opacity-0 md:group-hover:opacity-100"
@@ -628,8 +713,6 @@ function TransactionTile({
         >
           <Pencil size={13} />
         </button>
-
-        {/* Delete button */}
         <button
           onClick={() => onDelete(tx)}
           className="p-1.5 rounded-lg hover:bg-red-50 dark:hover:bg-red-900/20 text-gray-400 hover:text-red-500 transition-colors"
