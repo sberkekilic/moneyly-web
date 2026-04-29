@@ -848,41 +848,83 @@ function AddBankModal({
   onSave: (bank: any) => void;
   onClose: () => void;
 }) {
+  const { language } = useSettingsStore();
+  const lang = language || 'tr';
+
+  const [step, setStep] = useState<1 | 2>(1);
   const [bankName, setBankName] = useState('');
   const [accountName, setAccountName] = useState('');
   const [accountType, setAccountType] = useState<'debit' | 'credit'>('debit');
   const [balance, setBalance] = useState('');
+  const [currency, setCurrency] = useState('TRY');
   const [creditLimit, setCreditLimit] = useState('');
   const [cutoffDay, setCutoffDay] = useState('1');
 
-  // Live preview for new card too
   const parsedCutoffDay = Math.min(Math.max(parseInt(cutoffDay) || 1, 1), 31);
   const previewNextCutoff = computeNextCutoff(parsedCutoffDay);
   const previewDueDate = computeDueDate(previewNextCutoff);
 
+  const isCredit = accountType === 'credit';
+
+  const t = {
+    title:       lang === 'tr' ? 'Yeni Hesap Ekle' : 'Add New Account',
+    step1:       lang === 'tr' ? 'Hesap Bilgileri' : 'Account Info',
+    step2:       lang === 'tr' ? 'Detaylar' : 'Details',
+    bankName:    lang === 'tr' ? 'Banka Adı' : 'Bank Name',
+    bankPh:      lang === 'tr' ? 'Örn: Ziraat Bankası' : 'e.g. Chase Bank',
+    accName:     lang === 'tr' ? 'Hesap Adı' : 'Account Name',
+    accPh:       lang === 'tr' ? 'Örn: Vadesiz Hesap' : 'e.g. Checking',
+    accType:     lang === 'tr' ? 'Hesap Türü' : 'Account Type',
+    debitLabel:  lang === 'tr' ? 'Banka Hesabı' : 'Bank Account',
+    creditLabel: lang === 'tr' ? 'Kredi Kartı' : 'Credit Card',
+    debitDesc:   lang === 'tr' ? 'Vadesiz, tasarruf, yatırım hesabı' : 'Checking, savings, investment',
+    creditDesc:  lang === 'tr' ? 'Kredi kartı ve taksitli ödemeler' : 'Credit card and installment payments',
+    balance:     lang === 'tr' ? 'Mevcut Bakiye' : 'Current Balance',
+    currency:    lang === 'tr' ? 'Para Birimi' : 'Currency',
+    limit:       lang === 'tr' ? 'Kredi Limiti' : 'Credit Limit',
+    cutoff:      lang === 'tr' ? 'Hesap Kesim Günü' : 'Statement Cutoff Day',
+    cutoffSub:   lang === 'tr' ? 'Her ayın kaçıncı günü hesabınız kesilir?' : 'Which day does your statement close?',
+    preview:     lang === 'tr' ? 'Tarih Önizlemesi' : 'Date Preview',
+    nextCutoff:  lang === 'tr' ? 'Sonraki Kesim' : 'Next Statement',
+    dueDate:     lang === 'tr' ? 'Son Ödeme' : 'Due Date',
+    grace:       lang === 'tr' ? '+10 gün vade' : '+10 day grace',
+    next:        lang === 'tr' ? 'Devam Et' : 'Continue',
+    back:        lang === 'tr' ? 'Geri' : 'Back',
+    save:        lang === 'tr' ? 'Hesabı Ekle' : 'Add Account',
+    cancel:      lang === 'tr' ? 'İptal' : 'Cancel',
+    validation1: lang === 'tr' ? 'Banka ve hesap adı girin' : 'Enter bank and account name',
+  };
+
+  const handleNext = () => {
+    if (!bankName.trim() || !accountName.trim()) {
+      toast.error(t.validation1);
+      return;
+    }
+    setStep(2);
+  };
+
   const handleSave = () => {
     if (!bankName.trim() || !accountName.trim()) {
-      toast.error('Banka ve hesap adı girin');
+      toast.error(t.validation1);
       return;
     }
 
     const bankId = Date.now();
     const accountId = Date.now() + 1;
-    const isDebit = accountType === 'debit';
 
     const account: any = {
       accountId,
       name: accountName.trim(),
-      type: isDebit ? 'checking' : 'credit_card',
+      type: isCredit ? 'credit_card' : 'checking',
       balance: parseFloat(balance) || 0,
       transactions: [],
       debts: [],
-      currency: 'TRY',
-      isDebit,
+      currency,
+      isDebit: !isCredit,
       cutoffDate: parsedCutoffDay,
     };
 
-    if (!isDebit) {
+    if (isCredit) {
       const limit = parseFloat(creditLimit) || 0;
       account.creditLimit = limit;
       account.availableCredit = limit;
@@ -892,6 +934,7 @@ function AddBankModal({
       account.previousDebt = 0;
       account.minPayment = 0;
       account.remainingMinPayment = 0;
+      account.debtPayments = [];
     }
 
     onSave({ bankId, bankName: bankName.trim(), accounts: [account] });
@@ -899,97 +942,381 @@ function AddBankModal({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end justify-center bg-black/40"
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4 backdrop-blur-sm"
       onClick={onClose}
     >
       <div
-        className="bg-white dark:bg-gray-900 rounded-t-3xl p-6 w-full max-w-md space-y-4 max-h-[90vh] overflow-y-auto"
+        className="bg-white dark:bg-gray-900 rounded-3xl w-full max-w-2xl shadow-2xl overflow-hidden"
         onClick={(e) => e.stopPropagation()}
       >
-        <div className="w-10 h-1 bg-gray-300 dark:bg-gray-600 rounded-full mx-auto" />
-        <h3 className="text-lg font-bold text-gray-900 dark:text-white">Hesap Ekle</h3>
-
-        <div className="space-y-3">
-          <Field label="Banka Adı *" value={bankName} onChange={setBankName} placeholder="Örn: Ziraat Bankası" />
-          <Field label="Hesap Adı *" value={accountName} onChange={setAccountName} placeholder="Örn: Vadesiz Hesap" />
-
-          {/* Account Type */}
-          <div>
-            <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-2">Hesap Türü</p>
-            <div className="flex gap-2">
-              {(['debit', 'credit'] as const).map((type) => (
-                <button
-                  key={type}
-                  onClick={() => setAccountType(type)}
-                  className={cn(
-                    'flex-1 flex items-center justify-center gap-2 py-2.5 rounded-xl border-2 text-sm font-semibold transition-all',
-                    accountType === type
-                      ? type === 'debit'
-                        ? 'bg-green-500 text-white border-transparent'
-                        : 'bg-purple-500 text-white border-transparent'
-                      : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400'
-                  )}
-                >
-                  {type === 'debit' ? <><Wallet size={14} /> Banka</> : <><CreditCard size={14} /> Kredi</>}
-                </button>
-              ))}
+        {/* ── Header ── */}
+        <div className="flex items-center justify-between px-8 pt-8 pb-6 border-b border-gray-100 dark:border-gray-800">
+          <div className="flex items-center gap-4">
+            <div className={cn(
+              'w-12 h-12 rounded-2xl flex items-center justify-center',
+              isCredit
+                ? 'bg-purple-100 dark:bg-purple-900/30'
+                : 'bg-green-100 dark:bg-green-900/30'
+            )}>
+              {isCredit
+                ? <CreditCard size={22} className="text-purple-600" />
+                : <Wallet size={22} className="text-green-600" />}
+            </div>
+            <div>
+              <h2 className="text-xl font-bold text-gray-900 dark:text-white">{t.title}</h2>
+              <p className="text-sm text-gray-400 mt-0.5">
+                {step === 1 ? t.step1 : t.step2}
+              </p>
             </div>
           </div>
 
-          <Field label="Bakiye" value={balance} onChange={setBalance} placeholder="0.00" type="number" />
+          <div className="flex items-center gap-4">
+            {/* Step indicator */}
+            <div className="flex items-center gap-2">
+              <div className={cn(
+                'w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-colors',
+                step === 1
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-blue-100 dark:bg-blue-900/30 text-blue-600'
+              )}>1</div>
+              <div className={cn(
+                'w-10 h-0.5 rounded transition-colors',
+                step === 2 ? 'bg-blue-500' : 'bg-gray-200 dark:bg-gray-700'
+              )} />
+              <div className={cn(
+                'w-8 h-8 rounded-full flex items-center justify-center text-xs font-bold transition-colors',
+                step === 2
+                  ? 'bg-blue-500 text-white'
+                  : 'bg-gray-100 dark:bg-gray-800 text-gray-400'
+              )}>2</div>
+            </div>
 
-          {accountType === 'credit' && (
-            <>
-              <Field label="Kredi Limiti" value={creditLimit} onChange={setCreditLimit} placeholder="0.00" type="number" />
-
-              <div>
-                <p className="text-xs font-semibold text-gray-500 dark:text-gray-400 mb-1">
-                  Kesim Günü (1-31)
-                </p>
-                <input
-                  type="number"
-                  min="1"
-                  max="31"
-                  value={cutoffDay}
-                  onChange={(e) => setCutoffDay(e.target.value)}
-                  className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500"
-                />
-              </div>
-
-              {/* Live date preview */}
-              <div className="bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded-xl p-3">
-                <div className="flex items-center gap-2 mb-2">
-                  <Calendar size={13} className="text-blue-500" />
-                  <p className="text-xs font-bold text-blue-700 dark:text-blue-400">Tarih Önizlemesi</p>
-                </div>
-                <div className="grid grid-cols-2 gap-2">
-                  <div className="bg-white dark:bg-gray-800 rounded-lg p-2">
-                    <p className="text-[10px] text-gray-400">Sonraki Kesim</p>
-                    <p className="text-xs font-bold text-blue-600">{formatDateTR(previewNextCutoff)}</p>
-                  </div>
-                  <div className="bg-white dark:bg-gray-800 rounded-lg p-2">
-                    <p className="text-[10px] text-gray-400">Son Ödeme</p>
-                    <p className="text-xs font-bold text-orange-600">{formatDateTR(previewDueDate)}</p>
-                  </div>
-                </div>
-              </div>
-            </>
-          )}
+            <button
+              onClick={onClose}
+              className="w-9 h-9 flex items-center justify-center rounded-xl hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors text-gray-400 hover:text-gray-600 dark:hover:text-gray-200"
+            >
+              ✕
+            </button>
+          </div>
         </div>
 
-        <div className="flex gap-3 pt-2">
+        {/* ── Step 1: Account Type + Names ── */}
+        {step === 1 && (
+          <div className="px-8 py-6 space-y-6">
+            {/* Account type selector */}
+            <div>
+              <p className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-3">
+                {t.accType}
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                {(['debit', 'credit'] as const).map((type) => {
+                  const isSelected = accountType === type;
+                  const color = type === 'debit' ? 'green' : 'purple';
+                  return (
+                    <button
+                      key={type}
+                      onClick={() => setAccountType(type)}
+                      className={cn(
+                        'relative flex flex-col items-start gap-3 p-5 rounded-2xl border-2 text-left transition-all',
+                        isSelected
+                          ? type === 'debit'
+                            ? 'border-green-500 bg-green-50 dark:bg-green-900/10'
+                            : 'border-purple-500 bg-purple-50 dark:bg-purple-900/10'
+                          : 'border-gray-200 dark:border-gray-700 hover:border-gray-300 dark:hover:border-gray-600'
+                      )}
+                    >
+                      {/* Selection dot */}
+                      <div className={cn(
+                        'absolute top-4 right-4 w-5 h-5 rounded-full border-2 flex items-center justify-center transition-colors',
+                        isSelected
+                          ? type === 'debit'
+                            ? 'border-green-500 bg-green-500'
+                            : 'border-purple-500 bg-purple-500'
+                          : 'border-gray-300 dark:border-gray-600'
+                      )}>
+                        {isSelected && (
+                          <div className="w-2 h-2 rounded-full bg-white" />
+                        )}
+                      </div>
+
+                      <div className={cn(
+                        'w-10 h-10 rounded-xl flex items-center justify-center',
+                        type === 'debit'
+                          ? 'bg-green-100 dark:bg-green-900/30'
+                          : 'bg-purple-100 dark:bg-purple-900/30'
+                      )}>
+                        {type === 'debit'
+                          ? <Wallet size={20} className="text-green-600" />
+                          : <CreditCard size={20} className="text-purple-600" />}
+                      </div>
+
+                      <div>
+                        <p className={cn(
+                          'text-sm font-bold',
+                          isSelected
+                            ? type === 'debit' ? 'text-green-700 dark:text-green-400' : 'text-purple-700 dark:text-purple-400'
+                            : 'text-gray-900 dark:text-white'
+                        )}>
+                          {type === 'debit' ? t.debitLabel : t.creditLabel}
+                        </p>
+                        <p className="text-xs text-gray-500 dark:text-gray-400 mt-0.5">
+                          {type === 'debit' ? t.debitDesc : t.creditDesc}
+                        </p>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+
+            {/* Bank + Account name — side by side on desktop */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">
+                  {t.bankName} <span className="text-red-400">*</span>
+                </label>
+                <input
+                  value={bankName}
+                  onChange={(e) => setBankName(e.target.value)}
+                  placeholder={t.bankPh}
+                  className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
+                />
+              </div>
+              <div>
+                <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">
+                  {t.accName} <span className="text-red-400">*</span>
+                </label>
+                <input
+                  value={accountName}
+                  onChange={(e) => setAccountName(e.target.value)}
+                  placeholder={t.accPh}
+                  onKeyDown={(e) => e.key === 'Enter' && handleNext()}
+                  className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors"
+                />
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ── Step 2: Financial Details ── */}
+        {step === 2 && (
+          <div className="px-8 py-6 space-y-6">
+            {/* Account summary banner */}
+            <div className={cn(
+              'flex items-center gap-3 p-4 rounded-2xl',
+              isCredit
+                ? 'bg-purple-50 dark:bg-purple-900/10'
+                : 'bg-green-50 dark:bg-green-900/10'
+            )}>
+              <div className={cn(
+                'w-10 h-10 rounded-xl flex items-center justify-center flex-shrink-0',
+                isCredit
+                  ? 'bg-purple-100 dark:bg-purple-900/30'
+                  : 'bg-green-100 dark:bg-green-900/30'
+              )}>
+                {isCredit
+                  ? <CreditCard size={18} className="text-purple-600" />
+                  : <Wallet size={18} className="text-green-600" />}
+              </div>
+              <div>
+                <p className={cn('text-sm font-bold', isCredit ? 'text-purple-700 dark:text-purple-300' : 'text-green-700 dark:text-green-300')}>
+                  {bankName} — {accountName}
+                </p>
+                <p className="text-xs text-gray-500 dark:text-gray-400">
+                  {isCredit ? t.creditLabel : t.debitLabel}
+                </p>
+              </div>
+            </div>
+
+            {/* Balance + Currency */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div>
+                <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">
+                  {t.balance}
+                </label>
+                <div className="relative">
+                  <input
+                    type="number"
+                    value={balance}
+                    onChange={(e) => setBalance(e.target.value)}
+                    placeholder="0.00"
+                    className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500 transition-colors pr-16"
+                  />
+                  <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-gray-400 font-medium">
+                    {currency === 'TRY' ? '₺' : currency === 'USD' ? '$' : '€'}
+                  </span>
+                </div>
+              </div>
+              <div>
+                <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">
+                  {t.currency}
+                </label>
+                <div className="grid grid-cols-3 gap-2">
+                  {[
+                    { code: 'TRY', flag: '🇹🇷', symbol: '₺' },
+                    { code: 'USD', flag: '🇺🇸', symbol: '$' },
+                    { code: 'EUR', flag: '🇪🇺', symbol: '€' },
+                  ].map(({ code, flag, symbol }) => (
+                    <button
+                      key={code}
+                      onClick={() => setCurrency(code)}
+                      className={cn(
+                        'flex flex-col items-center gap-1 py-2.5 rounded-xl border-2 text-xs font-semibold transition-all',
+                        currency === code
+                          ? 'border-blue-500 bg-blue-50 dark:bg-blue-900/20 text-blue-700 dark:text-blue-300'
+                          : 'border-gray-200 dark:border-gray-700 text-gray-600 dark:text-gray-400 hover:border-gray-300'
+                      )}
+                    >
+                      <span className="text-base">{flag}</span>
+                      <span>{symbol} {code}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Credit card specific fields */}
+            {isCredit && (
+              <>
+                <div className="w-full h-px bg-gray-100 dark:bg-gray-800" />
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Credit Limit */}
+                  <div>
+                    <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">
+                      {t.limit}
+                    </label>
+                    <div className="relative">
+                      <input
+                        type="number"
+                        value={creditLimit}
+                        onChange={(e) => setCreditLimit(e.target.value)}
+                        placeholder="0.00"
+                        className="w-full bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-xl px-4 py-3 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-purple-500 transition-colors pr-8"
+                      />
+                      <span className="absolute right-4 top-1/2 -translate-y-1/2 text-sm text-gray-400">₺</span>
+                    </div>
+                  </div>
+
+                  {/* Cutoff Day */}
+                  <div>
+                    <label className="text-sm font-semibold text-gray-700 dark:text-gray-300 mb-2 block">
+                      {t.cutoff}
+                    </label>
+                    <p className="text-xs text-gray-400 mb-2">{t.cutoffSub}</p>
+                    {/* Day picker grid */}
+                    <div className="grid grid-cols-7 gap-1">
+                      {[1,5,10,14,15,20,25,28,29,30,31].map((day) => (
+                        <button
+                          key={day}
+                          onClick={() => setCutoffDay(String(day))}
+                          className={cn(
+                            'py-2 rounded-lg text-xs font-semibold transition-colors',
+                            parsedCutoffDay === day
+                              ? 'bg-purple-500 text-white'
+                              : 'bg-gray-100 dark:bg-gray-800 text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700'
+                          )}
+                        >
+                          {day}
+                        </button>
+                      ))}
+                      {/* Custom input */}
+                      <div className="col-span-2">
+                        <input
+                          type="number"
+                          min="1"
+                          max="31"
+                          value={cutoffDay}
+                          onChange={(e) => setCutoffDay(e.target.value)}
+                          placeholder="?"
+                          className="w-full py-2 px-2 rounded-lg text-xs font-semibold text-center bg-gray-100 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 text-gray-700 dark:text-gray-300 focus:outline-none focus:ring-2 focus:ring-purple-500"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Date preview */}
+                <div className="bg-blue-50 dark:bg-blue-900/10 border border-blue-200 dark:border-blue-800 rounded-2xl p-5">
+                  <div className="flex items-center gap-2 mb-4">
+                    <Calendar size={16} className="text-blue-500" />
+                    <p className="text-sm font-bold text-blue-700 dark:text-blue-400">{t.preview}</p>
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="bg-white dark:bg-gray-800 rounded-xl p-4">
+                      <p className="text-xs text-gray-400 mb-1">{t.nextCutoff}</p>
+                      <p className="text-lg font-bold text-blue-600 dark:text-blue-400">
+                        {formatDateTR(previewNextCutoff)}
+                      </p>
+                      <p className="text-[10px] text-gray-400 mt-1">
+                        {lang === 'tr' ? `Her ayın ${parsedCutoffDay}'i` : `Day ${parsedCutoffDay} each month`}
+                      </p>
+                    </div>
+                    <div className="bg-white dark:bg-gray-800 rounded-xl p-4">
+                      <p className="text-xs text-gray-400 mb-1">{t.dueDate}</p>
+                      <p className="text-lg font-bold text-orange-600 dark:text-orange-400">
+                        {formatDateTR(previewDueDate)}
+                      </p>
+                      <p className="text-[10px] text-gray-400 mt-1">{t.grace}</p>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Limit summary */}
+                {creditLimit && parseFloat(creditLimit) > 0 && (
+                  <div className="grid grid-cols-3 gap-3">
+                    {[
+                      { label: t.limit, value: `${formatAmount(parseFloat(creditLimit) || 0)}₺`, color: 'text-blue-600', bg: 'bg-blue-50 dark:bg-blue-900/10' },
+                      { label: lang === 'tr' ? 'Başlangıç Borcu' : 'Starting Debt', value: '0₺', color: 'text-green-600', bg: 'bg-green-50 dark:bg-green-900/10' },
+                      { label: lang === 'tr' ? 'Kullanılabilir' : 'Available', value: `${formatAmount(parseFloat(creditLimit) || 0)}₺`, color: 'text-emerald-600', bg: 'bg-emerald-50 dark:bg-emerald-900/10' },
+                    ].map((item) => (
+                      <div key={item.label} className={cn('rounded-xl p-3 text-center', item.bg)}>
+                        <p className="text-[10px] text-gray-500 mb-1">{item.label}</p>
+                        <p className={cn('text-sm font-bold', item.color)}>{item.value}</p>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        )}
+
+        {/* ── Footer Actions ── */}
+        <div className="flex items-center justify-between px-8 py-6 border-t border-gray-100 dark:border-gray-800 bg-gray-50/50 dark:bg-gray-800/30">
           <button
-            onClick={onClose}
-            className="flex-1 py-3 border border-gray-200 dark:border-gray-700 rounded-xl text-sm font-semibold text-gray-600 dark:text-gray-400 hover:bg-gray-50 dark:hover:bg-gray-800 transition-colors"
+            onClick={step === 1 ? onClose : () => setStep(1)}
+            className="flex items-center gap-2 px-5 py-2.5 rounded-xl border border-gray-200 dark:border-gray-700 text-sm font-semibold text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800 transition-colors"
           >
-            İptal
+            {step === 1 ? t.cancel : `← ${t.back}`}
           </button>
-          <button
-            onClick={handleSave}
-            className="flex-1 py-3 bg-blue-500 hover:bg-blue-600 text-white rounded-xl text-sm font-semibold transition-colors"
-          >
-            Kaydet
-          </button>
+
+          <div className="flex items-center gap-2 text-xs text-gray-400">
+            <span className={cn('w-2 h-2 rounded-full', step >= 1 ? 'bg-blue-500' : 'bg-gray-300')} />
+            <span className={cn('w-2 h-2 rounded-full', step >= 2 ? 'bg-blue-500' : 'bg-gray-300')} />
+          </div>
+
+          {step === 1 ? (
+            <button
+              onClick={handleNext}
+              className="flex items-center gap-2 px-6 py-2.5 bg-blue-500 hover:bg-blue-600 text-white rounded-xl text-sm font-semibold transition-colors"
+            >
+              {t.next} →
+            </button>
+          ) : (
+            <button
+              onClick={handleSave}
+              className={cn(
+                'flex items-center gap-2 px-6 py-2.5 rounded-xl text-sm font-semibold transition-colors text-white',
+                isCredit
+                  ? 'bg-purple-500 hover:bg-purple-600'
+                  : 'bg-green-500 hover:bg-green-600'
+              )}
+            >
+              {isCredit ? <CreditCard size={15} /> : <Wallet size={15} />}
+              {t.save}
+            </button>
+          )}
         </div>
       </div>
     </div>
