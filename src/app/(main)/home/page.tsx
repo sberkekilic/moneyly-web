@@ -1,14 +1,14 @@
 // src/app/(main)/home/page.tsx
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useTransactionStore } from '@/store/transactionStore';
 import { useIncomeStore } from '@/store/incomeStore';
 import { TransactionCard } from '@/components/transaction/TransactionCard';
 import { formatAmount } from '@/lib/formatters';
 import {
   TrendingUp, TrendingDown, Wallet, Calendar, RefreshCw,
-  ArrowUpRight, ArrowDownRight, BarChart3, CreditCard,
+  ArrowUpRight, BarChart3, CreditCard,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import Link from 'next/link';
@@ -19,6 +19,8 @@ import {
   calculateCreditCardCycle,
   formatMonthYear,
   toDateInputValue,
+  parseLocalDateInput,
+  isDateInRangeInclusive,
 } from '@/lib/creditCard';
 
 // ── Currency helpers ──────────────────────────────────────
@@ -26,11 +28,11 @@ import {
 const CURRENCY_SYMBOLS: Record<string, string> = {
   TRY: '₺', EUR: '€', USD: '$', GBP: '£',
 };
+
 function sym(currency: string) {
   return CURRENCY_SYMBOLS[currency] ?? currency;
 }
 
-/** Groups transaction amounts by currency → { TRY: 1500, EUR: 200 } */
 function totalsByCurrency(txs: any[]): Record<string, number> {
   return txs.reduce<Record<string, number>>((acc, t) => {
     const c = t.currency || 'TRY';
@@ -39,7 +41,6 @@ function totalsByCurrency(txs: any[]): Record<string, number> {
   }, {});
 }
 
-/** Renders "1.500 ₺ + 200 €" — or just "0 ₺" when empty */
 function CurrencyTotals({
   totals,
   colorClass,
@@ -49,22 +50,31 @@ function CurrencyTotals({
 }) {
   const entries = Object.entries(totals);
   if (entries.length === 0) {
-    return (
-      <p className={cn('text-2xl font-bold', colorClass)}>
-        {formatAmount(0)} ₺
-      </p>
-    );
+    return <p className={cn('text-2xl font-bold', colorClass)}>{formatAmount(0)} ₺</p>;
   }
   return (
     <div className="flex flex-col gap-0.5">
       {entries.map(([currency, amount]) => (
         <p key={currency} className={cn('text-2xl font-bold leading-tight', colorClass)}>
-          {formatAmount(amount)}{' '}
-          <span className="text-lg">{sym(currency)}</span>
+          {formatAmount(amount)} <span className="text-lg">{sym(currency)}</span>
         </p>
       ))}
     </div>
   );
+}
+
+// ── Build the set of valid transaction IDs from current bankDataList ──
+
+function buildValidTxIds(bankDataList: any[]): Set<number> {
+  const ids = new Set<number>();
+  for (const bank of bankDataList) {
+    for (const acc of bank.accounts ?? []) {
+      for (const tx of acc.transactions ?? []) {
+        ids.add(tx.transactionId);
+      }
+    }
+  }
+  return ids;
 }
 
 // ─────────────────────────────────────────────────────────
@@ -75,12 +85,11 @@ export default function HomePage() {
   const [selectedAccount, setSelectedAccount] = useState<any>(null);
 
   const now = new Date();
-  const [startDate, setStartDate] = useState(
-    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`
-  );
-  const [endDate, setEndDate] = useState(
-    `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
-  );
+  const defaultStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
+  const defaultEnd = toDateInputValue(now);
+
+  const [startDate, setStartDate] = useState(defaultStart);
+  const [endDate, setEndDate] = useState(defaultEnd);
   const [isDebtVisible, setIsDebtVisible] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
 
@@ -109,27 +118,32 @@ export default function HomePage() {
       ? calculateCreditCardCycle(selectedAccount.cutoffDate || 1)
       : null;
 
-  // ── Filtering ──
-  const filtered = transactions.filter((t) => {
-    const d = new Date(t.date);
-    if (startDate && d < new Date(startDate)) return false;
-    if (endDate && d > new Date(endDate)) return false;
-    return true;
-  });
+  // ── Build valid tx ID set so deleted account transactions are excluded ──
+  const validTxIds = useMemo(() => buildValidTxIds(bankDataList), [bankDataList]);
+
+  // ── Filter: only valid (existing account) transactions, within date range ──
+  const filtered = useMemo(() => {
+    return transactions.filter((t) => {
+      // Must belong to a currently existing account
+      if (!validTxIds.has(t.transactionId)) return false;
+
+      // Date range filter using timezone-safe parser
+      const d = parseLocalDateInput(t.date);
+      return isDateInRangeInclusive(d, startDate || undefined, endDate || undefined);
+    });
+  }, [transactions, validTxIds, startDate, endDate]);
 
   const expenseTxs = filtered.filter((t) => !t.isSurplus);
-
-  // Currency-split totals
   const expenseTotals = totalsByCurrency(expenseTxs);
 
-  // For net profit we still use the TRY-only total (income is always TRY in your store)
   const totalIncome = getTotalIncome();
   const totalExpenseTRY = expenseTotals['TRY'] ?? 0;
   const netProfit = totalIncome - totalExpenseTRY;
   const hasMultiCurrency = Object.keys(expenseTotals).length > 1;
 
-  const recentExpenses = [...expenseTxs].sort(
-    (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
+  const recentExpenses = useMemo(
+    () => [...expenseTxs].sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()),
+    [expenseTxs]
   );
 
   const incomeTxList = incomes.slice(0, 15).map((i) => ({
@@ -158,16 +172,13 @@ export default function HomePage() {
       <div className="space-y-6">
         {/* ── Metric Cards ── */}
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-          {/* Income — always single currency */}
           <MetricCard
             label="Toplam Gelir"
             amount={totalIncome}
             icon={<TrendingUp size={20} />}
-            trend={<ArrowUpRight size={14} />}
             color="green"
           />
 
-          {/* Expense — currency-aware */}
           <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 p-5">
             <div className="flex items-center justify-between mb-3">
               <p className="text-sm text-gray-500 dark:text-gray-400">Toplam Gider</p>
@@ -177,13 +188,10 @@ export default function HomePage() {
             </div>
             <CurrencyTotals totals={expenseTotals} colorClass="text-red-500" />
             {hasMultiCurrency && (
-              <p className="text-[10px] text-gray-400 mt-1">
-                Birden fazla para birimi
-              </p>
+              <p className="text-[10px] text-gray-400 mt-1">Birden fazla para birimi</p>
             )}
           </div>
 
-          {/* Net */}
           <MetricCard
             label={hasMultiCurrency ? 'Net (₺ bazlı)' : 'Net Kar/Zarar'}
             amount={netProfit}
@@ -202,7 +210,6 @@ export default function HomePage() {
               </span>
             </div>
 
-            {/* Date inputs row */}
             <div className="flex flex-wrap gap-3">
               <input
                 type="date"
@@ -217,14 +224,17 @@ export default function HomePage() {
                 className="flex-1 min-w-[140px] bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl px-4 py-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
               />
               <button
-                onClick={() => { setStartDate(''); setEndDate(''); }}
+                onClick={() => {
+                  setStartDate(defaultStart);
+                  setEndDate(defaultEnd);
+                }}
                 className="px-3 py-2.5 border border-gray-200 dark:border-gray-600 rounded-xl hover:bg-gray-50 dark:hover:bg-gray-700 transition-colors"
+                title="Sıfırla"
               >
                 <RefreshCw size={16} className="text-gray-400" />
               </button>
             </div>
 
-            {/* Billing period info — only shown for credit cards, BELOW inputs */}
             {selectedCycle && (
               <div className="mt-3 flex flex-wrap gap-2">
                 <span className="px-2.5 py-1 rounded-lg bg-blue-50 dark:bg-blue-900/20 text-xs font-semibold text-blue-600">
@@ -293,14 +303,12 @@ export default function HomePage() {
   );
 }
 
-// ── MetricCard ────────────────────────────────────────────
-
-function MetricCard({ label, amount, icon, color, trend }: any) {
+function MetricCard({ label, amount, icon, color }: any) {
   const m: any = {
-    green:  { bg: 'bg-green-50 dark:bg-green-900/10',  text: 'text-green-600',  iconBg: 'bg-green-100 dark:bg-green-900/30'  },
-    red:    { bg: 'bg-red-50 dark:bg-red-900/10',      text: 'text-red-500',    iconBg: 'bg-red-100 dark:bg-red-900/30'      },
-    blue:   { bg: 'bg-blue-50 dark:bg-blue-900/10',    text: 'text-blue-600',   iconBg: 'bg-blue-100 dark:bg-blue-900/30'    },
-    orange: { bg: 'bg-orange-50 dark:bg-orange-900/10',text: 'text-orange-500', iconBg: 'bg-orange-100 dark:bg-orange-900/30'},
+    green:  { text: 'text-green-600',  iconBg: 'bg-green-100 dark:bg-green-900/30'  },
+    red:    { text: 'text-red-500',    iconBg: 'bg-red-100 dark:bg-red-900/30'      },
+    blue:   { text: 'text-blue-600',   iconBg: 'bg-blue-100 dark:bg-blue-900/30'    },
+    orange: { text: 'text-orange-500', iconBg: 'bg-orange-100 dark:bg-orange-900/30'},
   };
   const c = m[color] || m.blue;
   return (
@@ -315,8 +323,6 @@ function MetricCard({ label, amount, icon, color, trend }: any) {
     </div>
   );
 }
-
-// ── TxList ────────────────────────────────────────────────
 
 function TxList({ title, icon, txs, emptyText }: any) {
   return (
