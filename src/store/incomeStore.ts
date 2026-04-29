@@ -7,74 +7,64 @@ import { useAuthStore } from './authStore';
 interface IncomeState {
   incomes: Income[];
   isLoading: boolean;
-  error: string | null;
-  
-  setIncomes: (incomes: Income[]) => void;
+
   loadIncomes: () => Promise<void>;
   addIncome: (income: Income) => Promise<void>;
-  deleteIncome: (id: number) => Promise<void>;
+  deleteIncome: (incomeId: number) => Promise<void>;
   updateIncome: (income: Income) => Promise<void>;
+  setIncomes: (incomes: Income[]) => void;
   getTotalIncome: () => number;
 }
 
 export const useIncomeStore = create<IncomeState>((set, get) => ({
   incomes: [],
   isLoading: false,
-  error: null,
 
   setIncomes: (incomes) => set({ incomes }),
 
   loadIncomes: async () => {
     const user = useAuthStore.getState().user;
-    if (!user) return;
+    if (!user) { set({ incomes: [] }); return; }
     set({ isLoading: true });
     try {
-      const incomes = await FirestoreService.loadIncomes(user.uid);
-      set({ incomes, isLoading: false });
+      const data = await FirestoreService.loadAllData(user.uid);
+      set({ incomes: data.incomes ?? [], isLoading: false });
     } catch (e) {
-      set({ error: String(e), isLoading: false });
+      console.error('Error loading incomes:', e);
+      set({ isLoading: false });
     }
   },
 
   addIncome: async (income) => {
     const user = useAuthStore.getState().user;
     if (!user) return;
-    set({ isLoading: true });
-    try {
-      const updated = [...get().incomes, income];
-      await FirestoreService.saveIncomes(user.uid, updated);
-      set({ incomes: updated, isLoading: false });
-    } catch (e) {
-      set({ error: String(e), isLoading: false });
-    }
-  },
-
-  deleteIncome: async (id) => {
-    const user = useAuthStore.getState().user;
-    if (!user) return;
-    set({ isLoading: true });
-    try {
-      const updated = get().incomes.filter(i => i.incomeId !== id);
-      await FirestoreService.saveIncomes(user.uid, updated);
-      set({ incomes: updated, isLoading: false });
-    } catch (e) {
-      set({ error: String(e), isLoading: false });
-    }
-  },
-
-  updateIncome: async (income: Income) => {
-    const user = useAuthStore.getState().user;
-    if (!user) return;
-
     const { incomes } = get();
-    const updated = incomes.map(i => i.incomeId === income.incomeId ? income : i);
+    const updated = [...incomes, income];
     set({ incomes: updated });
-
-    await FirestoreService.saveAllData(user.uid, {
-      ...(await FirestoreService.loadAllData(user.uid)),
-      incomes: updated,
-    });
+    await FirestoreService.saveAllData(user.uid, { incomes: updated });
   },
 
-  getTotalIncome: () => get().incomes.reduce((sum, i) => sum + i.amount, 0),
+  deleteIncome: async (incomeId) => {
+    const user = useAuthStore.getState().user;
+    if (!user) return;
+    const { incomes } = get();
+    const updated = incomes.filter((i) => i.incomeId !== incomeId);
+    set({ incomes: updated });
+    await FirestoreService.saveAllData(user.uid, { incomes: updated });
+  },
+
+  updateIncome: async (income) => {
+    const user = useAuthStore.getState().user;
+    if (!user) return;
+    const { incomes } = get();
+    const updated = incomes.map((i) =>
+      i.incomeId === income.incomeId ? income : i
+    );
+    set({ incomes: updated });
+    await FirestoreService.saveAllData(user.uid, { incomes: updated });
+  },
+
+  getTotalIncome: () => {
+    return get().incomes.reduce((sum, i) => sum + i.amount, 0);
+  },
 }));

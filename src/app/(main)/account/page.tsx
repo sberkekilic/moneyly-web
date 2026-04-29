@@ -71,7 +71,7 @@ function formatDateTR(date: Date): string {
 // ─────────────────────────────────────────────────────────
 
 export default function AccountsPage() {
-  const { bankDataList, loadAllData, isLoading } = useTransactionStore();
+  const { bankDataList, loadAllData, isLoading, deleteAccount } = useTransactionStore();
   const user = useAuthStore(s => s.user);
   const [selectedAccountId, setSelectedAccountId] = useState<number | undefined>(undefined);
   const [showAddBank, setShowAddBank] = useState(false);
@@ -94,36 +94,42 @@ export default function AccountsPage() {
   const totalBalance = debitAccounts.reduce((s, a) => s + (a.balance ?? 0), 0);
   const totalDebt = creditAccounts.reduce((s, a) => s + (a.totalDebt ?? 0), 0);
 
-  const saveToFirebase = async (banks: any[]) => {
-    if (!user) return;
-    const currentData = await FirestoreService.loadAllData(user.uid);
-    await FirestoreService.saveAllData(user.uid, {
-      ...currentData,
-      bankData: banks,
-    });
-    await loadAllData();
-  };
 
   const handleUpdate = async (updatedAcc: any) => {
+    const user = useAuthStore.getState().user; // need this import
+    if (!user) return;
+
     const updated = bankDataList.map((bank: any) => ({
       ...bank,
       accounts: bank.accounts?.map((a: any) =>
         a.accountId === updatedAcc.accountId ? { ...a, ...updatedAcc } : a
       ),
     }));
-    await saveToFirebase(updated);
+
+    // Use FirestoreService directly for account updates
+    await FirestoreService.saveAllData(user.uid, { bankData: updated });
+    await loadAllData();
     setEditingAccount(null);
     toast.success('Hesap güncellendi');
   };
 
   const handleDelete = async (acc: any) => {
-    const updated = bankDataList.map((bank: any) => ({
-      ...bank,
-      accounts: bank.accounts?.filter((a: any) => a.accountId !== acc.accountId),
-    }));
-    await saveToFirebase(updated);
-    if (selectedAccountId === acc.accountId) setSelectedAccountId(undefined);
-    toast.success('Hesap silindi');
+    try {
+      await deleteAccount(acc.accountId, acc.bankId);
+      if (selectedAccountId === acc.accountId) setSelectedAccountId(undefined);
+      toast.success('Hesap ve ilgili işlemler silindi');
+    } catch {
+      toast.error('Hesap silinemedi');
+    }
+  };
+
+  const handleAddBank = async (bank: any) => {
+    const user = useAuthStore.getState().user;
+    if (!user) return;
+    const updated = [...bankDataList, bank];
+    await FirestoreService.saveAllData(user.uid, { bankData: updated });
+    await loadAllData();
+    toast.success('Hesap eklendi');
   };
 
   const handleSelect = (acc: any) => setSelectedAccountId(acc.accountId);
@@ -204,12 +210,7 @@ export default function AccountsPage() {
 
         {showAddBank && (
           <AddBankModal
-            onSave={async (bank: any) => {
-              const updated = [...bankDataList, bank];
-              await saveToFirebase(updated);
-              setShowAddBank(false);
-              toast.success('Hesap eklendi');
-            }}
+            onSave={handleAddBank}
             onClose={() => setShowAddBank(false)}
           />
         )}

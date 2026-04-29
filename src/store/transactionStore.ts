@@ -3,7 +3,11 @@ import { create } from 'zustand';
 import { Transaction, createTransaction, TransactionType } from '@/models/transaction';
 import { FirestoreService } from '@/services/firestoreService';
 import { useAuthStore } from './authStore';
-import { recalculateCreditAccount, toLocalISOString, parseLocalDateInput } from '@/lib/creditCard';
+import {
+  recalculateCreditAccount,
+  toLocalISOString,
+  parseLocalDateInput,
+} from '@/lib/creditCard';
 
 const cleanForFirestore = (tx: Transaction): any => {
   const cleaned: any = {};
@@ -13,6 +17,16 @@ const cleanForFirestore = (tx: Transaction): any => {
   return cleaned;
 };
 
+/** Collect all transaction IDs that belong to a specific account */
+function getTxIdsForAccount(bank: any, accountId: number): Set<number> {
+  const ids = new Set<number>();
+  const acc = (bank.accounts ?? []).find((a: any) => a.accountId === accountId);
+  if (acc) {
+    (acc.transactions ?? []).forEach((t: any) => ids.add(t.transactionId));
+  }
+  return ids;
+}
+
 interface TransactionState {
   transactions: Transaction[];
   filteredTransactions: Transaction[];
@@ -21,11 +35,7 @@ interface TransactionState {
   error: string | null;
 
   loadAllData: () => Promise<void>;
-  addTransaction: (
-    transaction: Transaction,
-    accountId: number,
-    bankId: number
-  ) => Promise<void>;
+  addTransaction: (tx: Transaction, accountId: number, bankId: number) => Promise<void>;
   deleteTransaction: (
     accountId: number,
     bankId: number,
@@ -33,11 +43,13 @@ interface TransactionState {
     deleteAllInstallments?: boolean
   ) => Promise<void>;
   updateTransaction: (
-    transaction: Transaction,
+    tx: Transaction,
     accountId: number,
     bankId: number,
     updateAllInstallments?: boolean
   ) => Promise<void>;
+  deleteAccount: (accountId: number, bankId: number) => Promise<void>;
+  deleteAllUserData: () => Promise<void>;
   payCreditCardDebt: (
     accountId: number,
     bankId: number,
@@ -62,20 +74,14 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
   isLoading: false,
   error: null,
 
+  // ── Load ─────────────────────────────────────────────────────────────
   loadAllData: async () => {
     const user = useAuthStore.getState().user;
     if (!user) {
-      set({
-        transactions: [],
-        filteredTransactions: [],
-        bankDataList: [],
-        isLoading: false,
-      });
+      set({ transactions: [], filteredTransactions: [], bankDataList: [], isLoading: false });
       return;
     }
-
     set({ isLoading: true, error: null });
-
     try {
       const data = await FirestoreService.loadAllData(user.uid);
 
@@ -84,22 +90,43 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
         useIncomeStore.getState().setIncomes(data.incomes);
       }
 
+      if (data.investments !== undefined || data.investmentModels !== undefined) {
+        const { useInvestmentStore } = await import('@/store/investmentStore');
+        const invStore = useInvestmentStore.getState();
+        if (data.investments) invStore.setInvestments(data.investments);
+        if (data.investmentModels) invStore.setInvestmentModels(data.investmentModels);
+      }
+
       const recalculatedBanks = (data.bankData || []).map((bank: any) => ({
         ...bank,
         accounts: (bank.accounts || []).map((acc: any) =>
           acc.isDebit === false
-            ? recalculateCreditAccount({
-                ...acc,
-                debtPayments: acc.debtPayments || [],
-              })
+            ? recalculateCreditAccount({ ...acc, debtPayments: acc.debtPayments || [] })
             : acc
         ),
       }));
 
+      // Derive the canonical global transactions list from bankData
+      // so they are always in sync
+      const txsFromBanks: Transaction[] = recalculatedBanks.flatMap((bank: any) =>
+        (bank.accounts ?? []).flatMap((acc: any) =>
+          (acc.transactions ?? []).map((t: any) => t as Transaction)
+        )
+      );
+
+      // Also keep any transactions that are NOT in any account
+      // (e.g. standalone debt-payment surplus transactions)
+      const txIdsInBanks = new Set(txsFromBanks.map((t) => t.transactionId));
+      const standaloneFirestoreTxs = (data.transactions ?? []).filter(
+        (t: any) => !txIdsInBanks.has(t.transactionId)
+      );
+
+      const allTransactions = [...txsFromBanks, ...standaloneFirestoreTxs];
+
       set({
         bankDataList: recalculatedBanks,
-        transactions: data.transactions || [],
-        filteredTransactions: data.transactions || [],
+        transactions: allTransactions,
+        filteredTransactions: allTransactions,
         isLoading: false,
       });
     } catch (e) {
@@ -108,29 +135,25 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
     }
   },
 
+  // ── Add Transaction ───────────────────────────────────────────────────
   addTransaction: async (transaction, accountId, bankId) => {
     const user = useAuthStore.getState().user;
     if (!user) return;
-
     set({ isLoading: true, error: null });
-
     try {
       const { bankDataList, transactions } = get();
       const cleanedTx = cleanForFirestore(transaction);
 
       const updatedBanks = bankDataList.map((bank: any) => {
         if (bank.bankId !== bankId) return bank;
-
         return {
           ...bank,
           accounts: (bank.accounts || []).map((acc: any) => {
             if (acc.accountId !== accountId) return acc;
-
             const updated = {
               ...acc,
-              transactions: [...(acc.transactions || []), cleanedTx],
+              transactions: [...(acc.transactions ?? []), cleanedTx],
             };
-
             return acc.isDebit === false
               ? recalculateCreditAccount(updated)
               : updated;
@@ -158,43 +181,28 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
     }
   },
 
-  deleteTransaction: async (
-    accountId,
-    bankId,
-    transactionId,
-    deleteAllInstallments = false
-  ) => {
+  // ── Delete Transaction ────────────────────────────────────────────────
+  deleteTransaction: async (accountId, bankId, transactionId, deleteAllInstallments = false) => {
     const user = useAuthStore.getState().user;
     if (!user) return;
-
     set({ isLoading: true, error: null });
-
     try {
       const { bankDataList, transactions } = get();
-      const txToDelete = transactions.find(
-        (t: Transaction) => t.transactionId === transactionId
-      );
-      if (!txToDelete) {
-        set({ isLoading: false });
-        return;
-      }
+      const txToDelete = transactions.find((t) => t.transactionId === transactionId);
+      if (!txToDelete) { set({ isLoading: false }); return; }
 
       const idsToDelete = new Set<number>([transactionId]);
 
       if (deleteAllInstallments) {
         if (txToDelete.parentTransactionId) {
           transactions
-            .filter(
-              (t: Transaction) =>
-                t.parentTransactionId === txToDelete.parentTransactionId
-            )
+            .filter((t) => t.parentTransactionId === txToDelete.parentTransactionId)
             .forEach((t) => idsToDelete.add(t.transactionId));
         } else if (txToDelete.initialInstallmentDate) {
           transactions
             .filter(
-              (t: Transaction) =>
-                t.initialInstallmentDate ===
-                  txToDelete.initialInstallmentDate &&
+              (t) =>
+                t.initialInstallmentDate === txToDelete.initialInstallmentDate &&
                 t.title === txToDelete.title
             )
             .forEach((t) => idsToDelete.add(t.transactionId));
@@ -207,23 +215,19 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
           ...bank,
           accounts: (bank.accounts || []).map((acc: any) => {
             if (acc.accountId !== accountId) return acc;
-
             const updated = {
               ...acc,
-              transactions: (acc.transactions || []).filter(
+              transactions: (acc.transactions ?? []).filter(
                 (t: any) => !idsToDelete.has(t.transactionId)
               ),
             };
-
-            return acc.isDebit === false
-              ? recalculateCreditAccount(updated)
-              : updated;
+            return acc.isDebit === false ? recalculateCreditAccount(updated) : updated;
           }),
         };
       });
 
       const updatedTransactions = transactions.filter(
-        (t: Transaction) => !idsToDelete.has(t.transactionId)
+        (t) => !idsToDelete.has(t.transactionId)
       );
 
       await FirestoreService.saveAllData(user.uid, {
@@ -244,17 +248,11 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
     }
   },
 
-  updateTransaction: async (
-    transaction,
-    accountId,
-    bankId,
-    updateAllInstallments = false
-  ) => {
+  // ── Update Transaction ────────────────────────────────────────────────
+  updateTransaction: async (transaction, accountId, bankId, updateAllInstallments = false) => {
     const user = useAuthStore.getState().user;
     if (!user) return;
-
     set({ isLoading: true, error: null });
-
     try {
       const { bankDataList, transactions } = get();
       const cleanedTx = cleanForFirestore(transaction);
@@ -266,25 +264,15 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
           accounts: (bank.accounts || []).map((acc: any) => {
             if (acc.accountId !== accountId) return acc;
 
-            let updatedTxList = [...(acc.transactions || [])];
-
+            let updatedTxList = [...(acc.transactions ?? [])];
             if (updateAllInstallments && cleanedTx.parentTransactionId) {
-              updatedTxList = updatedTxList.map((t: any) => {
-                if (
-                  t.parentTransactionId === cleanedTx.parentTransactionId
-                ) {
-                  return {
-                    ...t,
-                    title: cleanedTx.title,
-                    category: cleanedTx.category,
-                    subcategory: cleanedTx.subcategory,
-                    description: cleanedTx.description,
-                    currency: cleanedTx.currency,
-                    isProvisioned: cleanedTx.isProvisioned,
-                  };
-                }
-                return t;
-              });
+              updatedTxList = updatedTxList.map((t: any) =>
+                t.parentTransactionId === cleanedTx.parentTransactionId
+                  ? { ...t, title: cleanedTx.title, category: cleanedTx.category,
+                      subcategory: cleanedTx.subcategory, description: cleanedTx.description,
+                      currency: cleanedTx.currency, isProvisioned: cleanedTx.isProvisioned }
+                  : t
+              );
             } else {
               updatedTxList = updatedTxList.map((t: any) =>
                 t.transactionId === cleanedTx.transactionId ? cleanedTx : t
@@ -292,33 +280,21 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
             }
 
             const updated = { ...acc, transactions: updatedTxList };
-
-            return acc.isDebit === false
-              ? recalculateCreditAccount(updated)
-              : updated;
+            return acc.isDebit === false ? recalculateCreditAccount(updated) : updated;
           }),
         };
       });
 
       const updatedTransactions =
         updateAllInstallments && cleanedTx.parentTransactionId
-          ? transactions.map((t: Transaction) => {
-              if (
-                t.parentTransactionId === cleanedTx.parentTransactionId
-              ) {
-                return {
-                  ...t,
-                  title: cleanedTx.title,
-                  category: cleanedTx.category,
-                  subcategory: cleanedTx.subcategory,
-                  description: cleanedTx.description,
-                  currency: cleanedTx.currency,
-                  isProvisioned: cleanedTx.isProvisioned,
-                };
-              }
-              return t;
-            })
-          : transactions.map((t: Transaction) =>
+          ? transactions.map((t) =>
+              t.parentTransactionId === cleanedTx.parentTransactionId
+                ? { ...t, title: cleanedTx.title, category: cleanedTx.category,
+                    subcategory: cleanedTx.subcategory, description: cleanedTx.description,
+                    currency: cleanedTx.currency, isProvisioned: cleanedTx.isProvisioned }
+                : t
+            )
+          : transactions.map((t) =>
               t.transactionId === cleanedTx.transactionId ? cleanedTx : t
             );
 
@@ -340,23 +316,110 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
     }
   },
 
-  /**
-   * Pay credit card debt:
-   * 1. Records a debtPayment entry on the account
-   * 2. Creates a surplus (income-type) transaction so it shows in outcome page
-   * 3. Recalculates all debt figures
-   */
-  payCreditCardDebt: async (accountId, bankId, amount, paidAt, note) => {
+  // ── Delete Account — also removes its transactions ────────────────────
+  deleteAccount: async (accountId, bankId) => {
     const user = useAuthStore.getState().user;
     if (!user) return;
-    if (!amount || amount <= 0) return;
-
     set({ isLoading: true, error: null });
-
     try {
       const { bankDataList, transactions } = get();
 
-      // Find account info for the payment transaction
+      // Collect all tx IDs belonging to this account
+      const idsToRemove = new Set<number>();
+      for (const bank of bankDataList) {
+        if (bank.bankId === bankId) {
+          const ids = getTxIdsForAccount(bank, accountId);
+          ids.forEach((id) => idsToRemove.add(id));
+        }
+      }
+
+      // Remove account from bank list; if bank is now empty, remove bank too
+      const updatedBanks = bankDataList
+        .map((bank: any) => {
+          if (bank.bankId !== bankId) return bank;
+          return {
+            ...bank,
+            accounts: (bank.accounts ?? []).filter(
+              (a: any) => a.accountId !== accountId
+            ),
+          };
+        })
+        .filter((bank: any) => (bank.accounts ?? []).length > 0);
+
+      // Remove orphaned transactions from the global list
+      const updatedTransactions = transactions.filter(
+        (t) => !idsToRemove.has(t.transactionId)
+      );
+
+      await FirestoreService.saveAllData(user.uid, {
+        bankData: updatedBanks,
+        transactions: updatedTransactions,
+      });
+
+      set({
+        bankDataList: updatedBanks,
+        transactions: updatedTransactions,
+        filteredTransactions: updatedTransactions,
+        isLoading: false,
+      });
+    } catch (e) {
+      console.error('Error deleting account:', e);
+      set({ error: 'Hesap silinemedi', isLoading: false });
+      throw e;
+    }
+  },
+
+  // ── Delete ALL user data ──────────────────────────────────────────────
+  deleteAllUserData: async () => {
+    const user = useAuthStore.getState().user;
+    if (!user) return;
+    set({ isLoading: true, error: null });
+    try {
+      const emptyData = {
+        bankData: [],
+        transactions: [],
+        incomes: [],
+        investments: [],
+        investmentModels: [],
+      };
+
+      // Overwrite Firebase completely (no merge)
+      const ref = doc(db, 'userData', user.uid);
+      const { setDoc } = await import('firebase/firestore');
+      await setDoc(ref, {
+        ...emptyData,
+        updatedAt: new Date().toISOString(),
+      });
+
+      // Clear all stores
+      const { useIncomeStore } = await import('@/store/incomeStore');
+      useIncomeStore.getState().setIncomes([]);
+
+      const { useInvestmentStore } = await import('@/store/investmentStore');
+      useInvestmentStore.getState().setInvestments([]);
+      useInvestmentStore.getState().setInvestmentModels([]);
+
+      set({
+        bankDataList: [],
+        transactions: [],
+        filteredTransactions: [],
+        isLoading: false,
+      });
+    } catch (e) {
+      console.error('Error deleting all data:', e);
+      set({ error: 'Veriler silinemedi', isLoading: false });
+      throw e;
+    }
+  },
+
+  // ── Pay Credit Card Debt ──────────────────────────────────────────────
+  payCreditCardDebt: async (accountId, bankId, amount, paidAt, note) => {
+    const user = useAuthStore.getState().user;
+    if (!user || !amount || amount <= 0) return;
+    set({ isLoading: true, error: null });
+    try {
+      const { bankDataList, transactions } = get();
+
       let accountName = '';
       let bankName = '';
       let currency = 'TRY';
@@ -364,13 +427,8 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
       for (const bank of bankDataList) {
         if (bank.bankId === bankId) {
           bankName = bank.bankName;
-          const acc = (bank.accounts || []).find(
-            (a: any) => a.accountId === accountId
-          );
-          if (acc) {
-            accountName = acc.name;
-            currency = acc.currency || 'TRY';
-          }
+          const acc = (bank.accounts ?? []).find((a: any) => a.accountId === accountId);
+          if (acc) { accountName = acc.name; currency = acc.currency || 'TRY'; }
         }
       }
 
@@ -378,7 +436,6 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
         ? toLocalISOString(parseLocalDateInput(paidAt))
         : toLocalISOString(new Date());
 
-      // Create a surplus transaction that represents the payment
       const paymentTx = createTransaction({
         title: `${bankName} ${accountName} Borç Ödemesi`,
         amount,
@@ -387,7 +444,7 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
         date: paymentDate,
         currency,
         isSurplus: true,
-        description: note?.trim() || `Kredi kartı borç ödemesi`,
+        description: note?.trim() || 'Kredi kartı borç ödemesi',
         isFromInvoice: false,
         isProvisioned: false,
         transactionType: TransactionType.normal,
@@ -399,16 +456,13 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
         if (bank.bankId !== bankId) return bank;
         return {
           ...bank,
-          accounts: (bank.accounts || []).map((acc: any) => {
-            if (acc.accountId !== accountId) return acc;
-            if (acc.isDebit !== false) return acc;
-
+          accounts: (bank.accounts ?? []).map((acc: any) => {
+            if (acc.accountId !== accountId || acc.isDebit !== false) return acc;
             const safeAmount = Math.min(amount, acc.totalDebt ?? amount);
-
             const updated = {
               ...acc,
               debtPayments: [
-                ...(acc.debtPayments || []),
+                ...(acc.debtPayments ?? []),
                 {
                   paymentId: Date.now(),
                   amount: safeAmount,
@@ -417,13 +471,8 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
                   transactionId: paymentTx.transactionId,
                 },
               ],
-              // Also add the surplus tx to the account's transactions
-              transactions: [
-                ...(acc.transactions || []),
-                cleanedPaymentTx,
-              ],
+              transactions: [...(acc.transactions ?? []), cleanedPaymentTx],
             };
-
             return recalculateCreditAccount(updated);
           }),
         };
@@ -449,41 +498,25 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
     }
   },
 
-  /**
-   * Pay a single installment transaction:
-   * marks it as paid and records a debt payment
-   */
+  // ── Pay Single Installment ────────────────────────────────────────────
   payInstallment: async (accountId, bankId, transactionId, amount, paidAt) => {
     const user = useAuthStore.getState().user;
     if (!user) return;
-
     set({ isLoading: true, error: null });
-
     try {
       const { bankDataList, transactions } = get();
+      const targetTx = transactions.find((t) => t.transactionId === transactionId);
+      if (!targetTx) { set({ isLoading: false }); return; }
 
-      const targetTx = transactions.find(
-        (t) => t.transactionId === transactionId
-      );
-      if (!targetTx) {
-        set({ isLoading: false });
-        return;
-      }
-
-      // Find account info
       let accountName = '';
       let bankName = '';
-      let currency = targetTx.currency || 'TRY';
+      const currency = targetTx.currency || 'TRY';
 
       for (const bank of bankDataList) {
         if (bank.bankId === bankId) {
           bankName = bank.bankName;
-          const acc = (bank.accounts || []).find(
-            (a: any) => a.accountId === accountId
-          );
-          if (acc) {
-            accountName = acc.name;
-          }
+          const acc = (bank.accounts ?? []).find((a: any) => a.accountId === accountId);
+          if (acc) accountName = acc.name;
         }
       }
 
@@ -493,7 +526,6 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
 
       const paymentAmount = amount || targetTx.amount;
 
-      // Create payment transaction (surplus)
       const paymentTx = createTransaction({
         title: `${targetTx.title} - Taksit Ödemesi`,
         amount: paymentAmount,
@@ -502,7 +534,7 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
         date: paymentDate,
         currency,
         isSurplus: true,
-        description: `${targetTx.currentInstallment || '?'}/${targetTx.installment || '?'} taksit ödemesi`,
+        description: `${targetTx.currentInstallment ?? '?'}/${targetTx.installment ?? '?'} taksit ödemesi`,
         isFromInvoice: false,
         isProvisioned: false,
         transactionType: TransactionType.normal,
@@ -510,31 +542,24 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
 
       const cleanedPaymentTx = cleanForFirestore(paymentTx);
 
-      // Update the original transaction as paid
       const updatedBanks = bankDataList.map((bank: any) => {
         if (bank.bankId !== bankId) return bank;
         return {
           ...bank,
-          accounts: (bank.accounts || []).map((acc: any) => {
+          accounts: (bank.accounts ?? []).map((acc: any) => {
             if (acc.accountId !== accountId) return acc;
 
-            // Mark the installment as paid in account transactions
-            const updatedTxList = (acc.transactions || []).map((t: any) => {
-              if (t.transactionId === transactionId) {
-                return {
-                  ...t,
-                  isInstallmentPaid: true,
-                  paidAmount: paymentAmount,
-                };
-              }
-              return t;
-            });
+            const updatedTxList = (acc.transactions ?? []).map((t: any) =>
+              t.transactionId === transactionId
+                ? { ...t, isInstallmentPaid: true, paidAmount: paymentAmount }
+                : t
+            );
 
             const updated = {
               ...acc,
               transactions: [...updatedTxList, cleanedPaymentTx],
               debtPayments: [
-                ...(acc.debtPayments || []),
+                ...(acc.debtPayments ?? []),
                 {
                   paymentId: Date.now(),
                   amount: paymentAmount,
@@ -546,24 +571,16 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
               ],
             };
 
-            return acc.isDebit === false
-              ? recalculateCreditAccount(updated)
-              : updated;
+            return acc.isDebit === false ? recalculateCreditAccount(updated) : updated;
           }),
         };
       });
 
-      // Update global transactions list
-      const updatedTransactions = transactions.map((t: Transaction) => {
-        if (t.transactionId === transactionId) {
-          return {
-            ...t,
-            isInstallmentPaid: true,
-            paidAmount: paymentAmount,
-          };
-        }
-        return t;
-      });
+      const updatedTransactions = transactions.map((t) =>
+        t.transactionId === transactionId
+          ? { ...t, isInstallmentPaid: true, paidAmount: paymentAmount }
+          : t
+      );
 
       const allTransactions = [...updatedTransactions, cleanedPaymentTx];
 
@@ -587,3 +604,6 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
 
   setBankDataList: (data) => set({ bankDataList: data }),
 }));
+
+// Need to import db for deleteAllUserData
+import { db } from '@/lib/firebase';
