@@ -58,7 +58,7 @@ function buildDateRangeDefaults() {
 }
 
 export default function OutcomePage() {
-  const { loadAllData, deleteTransaction, bankDataList } = useTransactionStore();
+  const { loadAllData, deleteTransaction, bankDataList, transactions } = useTransactionStore();
   const user = useAuthStore((s) => s.user);
   const { language } = useSettingsStore();
   const lang = language || 'tr';
