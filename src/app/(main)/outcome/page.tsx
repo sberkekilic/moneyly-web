@@ -490,6 +490,13 @@ const handleDelete = async (tx: Transaction) => {
           <EmptyState hasAccount={!!selectedAccount} t={t} />
         )}
 
+        {selectedAccount && isCreditCard && (
+          <PaidTransactionsSection
+            account={selectedAccount}
+            lang={lang}
+          />
+        )}
+
         {/* ── FAB ── */}
         <button
           onClick={() => setShowAddModal(true)}
@@ -884,6 +891,339 @@ function EmptyState({ hasAccount, t }: { hasAccount: boolean; t: any }) {
       <p className="text-sm text-gray-400">
         {hasAccount ? t.noExpensesSub : t.noAccountSub}
       </p>
+    </div>
+  );
+}
+
+function PaidTransactionsSection({
+  account,
+  lang,
+}: {
+  account: any;
+  lang: string;
+}) {
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  const allTxs: Transaction[] = account.transactions ?? [];
+  
+  // Paid installments
+  const paidInstallments = allTxs.filter(
+    (tx) => !tx.isSurplus && tx.isInstallmentPaid
+  );
+
+  // Debt payments (isSurplus payments with category 'Borç Ödemesi')
+  const debtPayments = allTxs.filter(
+    (tx) => tx.isSurplus && tx.category === 'Borç Ödemesi'
+  );
+
+  const totalPaidItems = paidInstallments.length + debtPayments.length;
+
+  if (totalPaidItems === 0) return null;
+
+  const totalPaidAmount = [
+    ...paidInstallments.map((tx) => tx.amount),
+    ...debtPayments.map((tx) => tx.amount),
+  ].reduce((s, a) => s + a, 0);
+
+  // Group paid installments by parentTransactionId
+  const installmentGroups: Record<string, Transaction[]> = {};
+  paidInstallments.forEach((tx) => {
+    const key = tx.parentTransactionId
+      ? String(tx.parentTransactionId)
+      : String(tx.transactionId);
+    if (!installmentGroups[key]) installmentGroups[key] = [];
+    installmentGroups[key].push(tx);
+  });
+
+  const t = {
+    title: lang === 'tr' ? 'Ödenen İşlemler' : 'Paid Transactions',
+    paidInstallments: lang === 'tr' ? 'Ödenen Taksitler' : 'Paid Installments',
+    debtPayments: lang === 'tr' ? 'Borç Ödemeleri' : 'Debt Payments',
+    totalPaid: lang === 'tr' ? 'Toplam Ödenen' : 'Total Paid',
+    paidOn: lang === 'tr' ? 'Ödeme Tarihi' : 'Paid On',
+    installment: lang === 'tr' ? 'Taksit' : 'Installment',
+    showAll: lang === 'tr' ? 'Tümünü Göster' : 'Show All',
+    hide: lang === 'tr' ? 'Gizle' : 'Hide',
+    items: lang === 'tr' ? 'işlem' : 'items',
+    of: lang === 'tr' ? 'taksit ödenmiş' : 'installments paid',
+  };
+
+  return (
+    <div className="bg-white dark:bg-gray-800 rounded-2xl border border-gray-200 dark:border-gray-700 overflow-hidden">
+      {/* Header — always visible */}
+      <button
+        onClick={() => setIsExpanded(!isExpanded)}
+        className="w-full flex items-center justify-between p-5 hover:bg-gray-50 dark:hover:bg-gray-700/50 transition-colors"
+      >
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-green-100 dark:bg-green-900/30 flex items-center justify-center">
+            <CheckCircle2 size={18} className="text-green-600" />
+          </div>
+          <div className="text-left">
+            <p className="text-sm font-bold text-gray-900 dark:text-white">
+              {t.title}
+            </p>
+            <p className="text-xs text-gray-500 dark:text-gray-400">
+              {totalPaidItems} {t.items} · {formatAmount(totalPaidAmount)}{' '}
+              {getCurrencySymbol(account.currency || 'TRY')}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          <span className="text-xs font-semibold text-green-600 bg-green-50 dark:bg-green-900/20 px-2.5 py-1 rounded-lg">
+            {t.totalPaid}: {formatAmount(totalPaidAmount)}{' '}
+            {getCurrencySymbol(account.currency || 'TRY')}
+          </span>
+          <ChevronRight
+            size={16}
+            className={cn(
+              'text-gray-400 transition-transform duration-200',
+              isExpanded && 'rotate-90'
+            )}
+          />
+        </div>
+      </button>
+
+      {/* Expandable content */}
+      {isExpanded && (
+        <div className="border-t border-gray-100 dark:border-gray-700">
+          {/* ── Paid Installments ── */}
+          {paidInstallments.length > 0 && (
+            <div className="p-5 space-y-3">
+              <div className="flex items-center gap-2">
+                <Receipt size={14} className="text-purple-500" />
+                <p className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+                  {t.paidInstallments}
+                </p>
+                <span className="text-[10px] text-gray-400 ml-auto">
+                  {paidInstallments.length} {t.items}
+                </span>
+              </div>
+
+              {/* Grouped by parent transaction */}
+              {Object.entries(installmentGroups).map(([groupId, txs]) => {
+                const firstTx = txs[0];
+                const totalInstallments = firstTx.installment ?? 1;
+
+                // Count all siblings (paid + unpaid) from full account txs
+                const allSiblings = allTxs.filter(
+                  (tx) =>
+                    !tx.isSurplus &&
+                    tx.parentTransactionId === firstTx.parentTransactionId
+                );
+                const paidCount = allSiblings.filter(
+                  (tx) => tx.isInstallmentPaid
+                ).length;
+
+                const groupTotal = txs.reduce((s, tx) => s + tx.amount, 0);
+                const fullTotal = firstTx.totalAmount ?? groupTotal;
+
+                return (
+                  <div
+                    key={groupId}
+                    className="bg-green-50/50 dark:bg-green-900/10 rounded-xl border border-green-100 dark:border-green-900/30 overflow-hidden"
+                  >
+                    {/* Group header */}
+                    <div className="px-4 py-3 flex items-center justify-between">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-6 h-6 rounded-full bg-green-100 dark:bg-green-900/30 flex items-center justify-center flex-shrink-0">
+                          <CheckCircle2 size={12} className="text-green-600" />
+                        </div>
+                        <div className="min-w-0">
+                          <p className="text-sm font-semibold text-gray-900 dark:text-white truncate">
+                            {firstTx.title}
+                          </p>
+                          <p className="text-[10px] text-gray-500">
+                            {paidCount}/{totalInstallments} {t.of} ·{' '}
+                            {lang === 'tr' ? 'Toplam' : 'Total'}:{' '}
+                            {formatAmount(fullTotal)}{' '}
+                            {getCurrencySymbol(firstTx.currency || 'TRY')}
+                          </p>
+                        </div>
+                      </div>
+                      <p className="text-sm font-bold text-green-600 tabular-nums flex-shrink-0">
+                        {formatAmount(groupTotal)}{' '}
+                        {getCurrencySymbol(firstTx.currency || 'TRY')}
+                      </p>
+                    </div>
+
+                    {/* Progress bar */}
+                    <div className="px-4 pb-2">
+                      <div className="w-full bg-gray-200 dark:bg-gray-700 rounded-full h-1.5">
+                        <div
+                          className="h-1.5 rounded-full bg-green-500 transition-all"
+                          style={{
+                            width: `${
+                              totalInstallments > 0
+                                ? (paidCount / totalInstallments) * 100
+                                : 0
+                            }%`,
+                          }}
+                        />
+                      </div>
+                    </div>
+
+                    {/* Individual paid installments */}
+                    {txs
+                      .sort(
+                        (a, b) =>
+                          (a.currentInstallment ?? 0) -
+                          (b.currentInstallment ?? 0)
+                      )
+                      .map((tx) => (
+                        <div
+                          key={tx.transactionId}
+                          className="flex items-center gap-3 px-4 py-2 border-t border-green-100/50 dark:border-green-900/20"
+                        >
+                          <span className="text-[10px] font-bold text-green-600 bg-green-100 dark:bg-green-900/30 px-1.5 py-0.5 rounded w-10 text-center flex-shrink-0">
+                            {tx.currentInstallment ?? '?'}/
+                            {tx.installment ?? '?'}
+                          </span>
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-1.5">
+                              <Calendar
+                                size={10}
+                                className="text-gray-400 flex-shrink-0"
+                              />
+                              <span className="text-[10px] text-gray-500 truncate">
+                                {formatDateShort(tx.date)}
+                              </span>
+                            </div>
+                          </div>
+                          <p className="text-xs font-bold text-green-600 tabular-nums flex-shrink-0 line-through opacity-70">
+                            {formatAmount(tx.amount)}{' '}
+                            {getCurrencySymbol(tx.currency || 'TRY')}
+                          </p>
+                          <CheckCircle2
+                            size={12}
+                            className="text-green-500 flex-shrink-0"
+                          />
+                        </div>
+                      ))}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+
+          {/* ── Debt Payments ── */}
+          {debtPayments.length > 0 && (
+            <div className="p-5 space-y-3 border-t border-gray-100 dark:border-gray-700">
+              <div className="flex items-center gap-2">
+                <Wallet size={14} className="text-blue-500" />
+                <p className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+                  {t.debtPayments}
+                </p>
+                <span className="text-[10px] text-gray-400 ml-auto">
+                  {debtPayments.length} {t.items}
+                </span>
+              </div>
+
+              <div className="space-y-2">
+                {debtPayments
+                  .sort(
+                    (a, b) =>
+                      new Date(b.date).getTime() - new Date(a.date).getTime()
+                  )
+                  .map((tx) => (
+                    <div
+                      key={tx.transactionId}
+                      className="flex items-center gap-3 p-3 bg-blue-50/50 dark:bg-blue-900/10 rounded-xl border border-blue-100 dark:border-blue-900/30"
+                    >
+                      <div className="w-8 h-8 rounded-full bg-blue-100 dark:bg-blue-900/30 flex items-center justify-center flex-shrink-0">
+                        <ArrowDownRight
+                          size={14}
+                          className="text-blue-500 rotate-180"
+                        />
+                      </div>
+                      <div className="flex-1 min-w-0">
+                        <p className="text-xs font-semibold text-gray-900 dark:text-white truncate">
+                          {tx.title}
+                        </p>
+                        <div className="flex items-center gap-1.5 mt-0.5">
+                          <Calendar size={10} className="text-gray-400" />
+                          <span className="text-[10px] text-gray-500">
+                            {formatDateShort(tx.date)}
+                          </span>
+                          {tx.description && (
+                            <>
+                              <span className="text-[10px] text-gray-300">
+                                ·
+                              </span>
+                              <span className="text-[10px] text-gray-400 truncate">
+                                {tx.description}
+                              </span>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <p className="text-sm font-bold text-blue-600 tabular-nums flex-shrink-0">
+                        +{formatAmount(tx.amount)}{' '}
+                        {getCurrencySymbol(tx.currency || 'TRY')}
+                      </p>
+                    </div>
+                  ))}
+              </div>
+
+              {/* Total debt payments summary */}
+              <div className="flex items-center justify-between p-3 bg-blue-50 dark:bg-blue-900/20 rounded-xl">
+                <span className="text-xs font-semibold text-blue-700 dark:text-blue-400">
+                  {t.totalPaid}
+                </span>
+                <span className="text-sm font-bold text-blue-700 dark:text-blue-400 tabular-nums">
+                  {formatAmount(
+                    debtPayments.reduce((s, tx) => s + tx.amount, 0)
+                  )}{' '}
+                  {getCurrencySymbol(account.currency || 'TRY')}
+                </span>
+              </div>
+            </div>
+          )}
+
+          {/* ── Payment History from debtPayments array ── */}
+          {(account.debtPayments ?? []).length > 0 && (
+            <div className="p-5 space-y-3 border-t border-gray-100 dark:border-gray-700">
+              <div className="flex items-center gap-2">
+                <Shield size={14} className="text-green-500" />
+                <p className="text-xs font-bold text-gray-700 dark:text-gray-300 uppercase tracking-wider">
+                  {lang === 'tr' ? 'Ödeme Geçmişi' : 'Payment History'}
+                </p>
+              </div>
+
+              <div className="space-y-1">
+                {(account.debtPayments as any[])
+                  .sort(
+                    (a, b) =>
+                      new Date(b.date).getTime() - new Date(a.date).getTime()
+                  )
+                  .map((payment: any, idx: number) => (
+                    <div
+                      key={payment.paymentId ?? idx}
+                      className="flex items-center justify-between py-2 px-3 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700/50"
+                    >
+                      <div className="flex items-center gap-2 min-w-0">
+                        <div className="w-1.5 h-1.5 rounded-full bg-green-500 flex-shrink-0" />
+                        <span className="text-xs text-gray-600 dark:text-gray-400">
+                          {formatDateShort(payment.date)}
+                        </span>
+                        {payment.note && (
+                          <span className="text-[10px] text-gray-400 truncate">
+                            · {payment.note}
+                          </span>
+                        )}
+                      </div>
+                      <span className="text-xs font-bold text-green-600 tabular-nums flex-shrink-0">
+                        +{formatAmount(payment.amount)}{' '}
+                        {getCurrencySymbol(account.currency || 'TRY')}
+                      </span>
+                    </div>
+                  ))}
+              </div>
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

@@ -14,6 +14,7 @@ import { useTransactionStore } from '@/store/transactionStore';
 import { useIncomeStore } from '@/store/incomeStore';
 import { cn } from '@/lib/utils';
 import { formatAmount } from '@/lib/formatters';
+import { GlobalAccountBadge } from '../GlobalAccountBadge';
 
 // ── Types ─────────────────────────────────────────────────
 
@@ -249,6 +250,7 @@ export function Header() {
       <div className="max-w-6xl mx-auto flex items-center justify-between">
         {/* Left */}
         <div className="flex items-center gap-3">
+          <GlobalAccountBadge />
           <div className="lg:hidden w-8 h-8 bg-green-600 rounded-lg flex items-center justify-center">
             <span className="text-white font-bold text-sm">M</span>
           </div>
