@@ -68,10 +68,22 @@ export default function OutcomePage() {
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
 
-  // ── Date range state — INSIDE the component ──
   const defaults = buildDateRangeDefaults();
   const [startDate, setStartDate] = useState(defaults.start);
   const [endDate, setEndDate] = useState(defaults.end);
+
+    const selectedAccount = useMemo(() => {
+    if (!storedAccount) return null;
+    for (const bank of bankDataList) {
+      if (bank.bankId === storedAccount.bankId) {
+        const fresh = bank.accounts?.find(
+          (a: any) => a.accountId === storedAccount.accountId
+        );
+        if (fresh) return { ...fresh, bankId: bank.bankId, bankName: bank.bankName };
+      }
+    }
+    return storedAccount;
+  }, [storedAccount, bankDataList]);
 
   const t = {
     title:         lang === 'tr' ? 'Giderler' : 'Expenses',
@@ -108,14 +120,14 @@ export default function OutcomePage() {
   }, [user]);
 
   useEffect(() => {
-  if (bankDataList.length > 0 && !storedAccount) {
-    const b = bankDataList[0];
-    if (b?.accounts?.[0])
-      setSelectedAccount({ ...b.accounts[0], bankId: b.bankId, bankName: b.bankName });
-  }
-}, [bankDataList]);
+    if (bankDataList.length > 0 && !storedAccount) {
+      const b = bankDataList[0];
+      if (b?.accounts?.[0])
+        setSelectedAccount({ ...b.accounts[0], bankId: b.bankId, bankName: b.bankName });
+    }
+  }, [bankDataList]);
 
-  // ── Auto-set billing period when credit card selected ──
+  // ── This useEffect now works because selectedAccount is already declared above ──
   useEffect(() => {
     if (!selectedAccount) return;
     if (selectedAccount.isDebit === false) {
@@ -224,20 +236,6 @@ export default function OutcomePage() {
 
   const expenseCount = getAccountTransactions().filter((tx) => !tx.isSurplus).length;
 
-  // Resolve fresh account data from bankDataList (keeps data in sync)
-const selectedAccount = useMemo(() => {
-  if (!storedAccount) return null;
-  for (const bank of bankDataList) {
-    if (bank.bankId === storedAccount.bankId) {
-      const fresh = bank.accounts?.find(
-        (a: any) => a.accountId === storedAccount.accountId
-      );
-      if (fresh) return { ...fresh, bankId: bank.bankId, bankName: bank.bankName };
-    }
-  }
-  return storedAccount; // fallback to stored if not found yet
-}, [storedAccount, bankDataList]);
-
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -282,10 +280,10 @@ const selectedAccount = useMemo(() => {
               </div>
               <select
                 value={
-                  selectedAccountRef
-                    ? `${selectedAccountRef.bankId}_${selectedAccountRef.accountId}`
-                    : ''
-                }
+  storedAccount
+    ? `${storedAccount.bankId}_${storedAccount.accountId}`
+    : ''
+}
                 onChange={handleAccountChange}
                 className="w-full bg-gray-50 dark:bg-gray-700 border border-gray-200 dark:border-gray-600 rounded-xl px-3 py-2.5 text-sm text-gray-900 dark:text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
