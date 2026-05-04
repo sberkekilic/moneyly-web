@@ -103,19 +103,6 @@ export default function OutcomePage() {
     nextCutoff:    lang === 'tr' ? 'Sonraki Kesim' : 'Next Cutoff',
   };
 
-  const selectedAccount = useMemo(() => {
-  if (!storedAccount) return null;
-  for (const bank of bankDataList) {
-    if (bank.bankId === storedAccount.bankId) {
-      const fresh = bank.accounts?.find(
-        (a: any) => a.accountId === storedAccount.accountId
-      );
-      if (fresh) return { ...fresh, bankId: bank.bankId, bankName: bank.bankName };
-    }
-  }
-  return storedAccount; // fallback to stored if not found yet
-}, [storedAccount, bankDataList]);
-
   useEffect(() => {
     loadAllData().finally(() => setIsLoading(false));
   }, [user]);
