@@ -84,14 +84,14 @@ const selectedAccountId = storedAccount?.accountId;
   }, []);
 
     // Auto-select first account if none selected
-  useEffect(() => {
-    if (bankDataList.length > 0 && !selectedAccount) {
-      const b = bankDataList[0];
-      if (b?.accounts?.[0]) {
-        setSelectedAccount({ ...b.accounts[0], bankId: b.bankId, bankName: b.bankName });
-      }
+useEffect(() => {
+  if (bankDataList.length > 0 && !storedAccount) { 
+    const b = bankDataList[0];
+    if (b?.accounts?.[0]) {
+      setSelectedAccount({ ...b.accounts[0], bankId: b.bankId, bankName: b.bankName });
     }
-  }, [bankDataList]);
+  }
+}, [bankDataList]);
 
   const allAccounts = bankDataList.flatMap((bank: any) =>
     (bank.accounts ?? []).map((acc: any) => ({
