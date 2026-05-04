@@ -589,7 +589,7 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
   txs: Transaction[],
   accountId: number,
   bankId: number
-) => Promise<void>;
+) => Promise<void>,
 
 // Add to the store implementation after addTransaction:
 addTransactionsBatch: async (txs, accountId, bankId) => {
