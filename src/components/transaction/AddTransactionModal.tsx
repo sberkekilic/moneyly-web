@@ -129,13 +129,11 @@ export function AddTransactionModal({
           });
         });
         // Save all installments one by one (or batch if your store supports it)
-        for (const tx of allTransactions) {
-          await addTransactionsBatch(
-            allTransactions,
-            selectedAccount.accountId,
-            selectedAccount.bankId
-          );
-        }
+        await addTransactionsBatch(
+  allTransactions,
+  selectedAccount.accountId,
+  selectedAccount.bankId
+);
 
         toast.success(
           `${installmentCount} taksit eklendi — her biri ${installmentAmount.toFixed(2)} ${currency}`

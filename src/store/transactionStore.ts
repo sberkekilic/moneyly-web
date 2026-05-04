@@ -64,6 +64,11 @@ interface TransactionState {
     paidAt?: string
   ) => Promise<void>;
   setBankDataList: (data: any[]) => void;
+  addTransactionsBatch: (
+  txs: Transaction[],
+  accountId: number,
+  bankId: number
+) => Promise<void>;
 }
 
 export const useTransactionStore = create<TransactionState>((set, get) => ({
@@ -584,15 +589,7 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
   },
 
   setBankDataList: (data) => set({ bankDataList: data }),
-
-  addTransactionsBatch: (
-  txs: Transaction[],
-  accountId: number,
-  bankId: number
-) => Promise<void>,
-
-// Add to the store implementation after addTransaction:
-addTransactionsBatch: async (txs, accountId, bankId) => {
+  addTransactionsBatch: async (txs, accountId, bankId) => {
   const user = useAuthStore.getState().user;
   if (!user || txs.length === 0) return;
   set({ isLoading: true, error: null });
@@ -634,4 +631,5 @@ addTransactionsBatch: async (txs, accountId, bankId) => {
     throw e;
   }
 },
+
 }));
