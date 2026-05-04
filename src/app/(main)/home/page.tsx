@@ -83,7 +83,7 @@ function buildValidTxIds(bankDataList: any[]): Set<number> {
 export default function HomePage() {
   const { transactions, loadAllData, bankDataList } = useTransactionStore();
   const { incomes, loadIncomes, getTotalIncome } = useIncomeStore();
-  const { selectedAccount, setSelectedAccount } = useAccountStore();
+  const { selectedAccount: storedAccount, setSelectedAccount } = useAccountStore();
 
   const now = new Date();
   const defaultStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;
@@ -94,17 +94,30 @@ export default function HomePage() {
   const [isDebtVisible, setIsDebtVisible] = useState(true);
   const [isLoading, setIsLoading] = useState(true);
 
+  const selectedAccount = useMemo(() => {
+  if (!storedAccount) return null;
+  for (const bank of bankDataList) {
+    if (bank.bankId === storedAccount.bankId) {
+      const fresh = bank.accounts?.find(
+        (a: any) => a.accountId === storedAccount.accountId
+      );
+      if (fresh) return { ...fresh, bankId: bank.bankId, bankName: bank.bankName };
+    }
+  }
+  return storedAccount;
+}, [storedAccount, bankDataList]);
+
   useEffect(() => {
     loadAllData().then(() => loadIncomes()).finally(() => setIsLoading(false));
   }, []);
 
-  useEffect(() => {
-    if (bankDataList.length > 0 && !selectedAccount) {
-      const b = bankDataList[0];
-      if (b?.accounts?.[0])
-        setSelectedAccount({ ...b.accounts[0], bankId: b.bankId, bankName: b.bankName });
-    }
-  }, [bankDataList]);
+useEffect(() => {
+  if (bankDataList.length > 0 && !storedAccount) {
+    const b = bankDataList[0];
+    if (b?.accounts?.[0])
+      setSelectedAccount({ ...b.accounts[0], bankId: b.bankId, bankName: b.bankName });
+  }
+}, [bankDataList]);
 
   useEffect(() => {
     if (selectedAccount?.isDebit === false) {

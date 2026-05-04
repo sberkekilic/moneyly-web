@@ -1,7 +1,6 @@
 // src/app/(main)/outcome/page.tsx
 'use client';
-
-import { useEffect, useState } from 'react';
+import { useEffect, useState, useMemo } from 'react';
 import { useTransactionStore } from '@/store/transactionStore';
 import { useAuthStore } from '@/store/authStore';
 import { useSettingsStore } from '@/store/settingsStore';
@@ -64,7 +63,7 @@ export default function OutcomePage() {
   const { language } = useSettingsStore();
   const lang = language || 'tr';
 
-const { selectedAccount, setSelectedAccount } = useAccountStore();
+  const { selectedAccount: storedAccount, setSelectedAccount } = useAccountStore();
   const [isLoading, setIsLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
@@ -104,31 +103,30 @@ const { selectedAccount, setSelectedAccount } = useAccountStore();
     nextCutoff:    lang === 'tr' ? 'Sonraki Kesim' : 'Next Cutoff',
   };
 
+  const selectedAccount = useMemo(() => {
+  if (!storedAccount) return null;
+  for (const bank of bankDataList) {
+    if (bank.bankId === storedAccount.bankId) {
+      const fresh = bank.accounts?.find(
+        (a: any) => a.accountId === storedAccount.accountId
+      );
+      if (fresh) return { ...fresh, bankId: bank.bankId, bankName: bank.bankName };
+    }
+  }
+  return storedAccount; // fallback to stored if not found yet
+}, [storedAccount, bankDataList]);
+
   useEffect(() => {
     loadAllData().finally(() => setIsLoading(false));
   }, [user]);
 
   useEffect(() => {
-  if (bankDataList.length > 0 && !selectedAccount) {
+  if (bankDataList.length > 0 && !storedAccount) {
     const b = bankDataList[0];
     if (b?.accounts?.[0])
       setSelectedAccount({ ...b.accounts[0], bankId: b.bankId, bankName: b.bankName });
   }
 }, [bankDataList]);
-
-  // ── Resolve selectedAccount from ref ──
-  const selectedAccount = (() => {
-    if (!selectedAccount) return null;
-    for (const bank of bankDataList) {
-      if (bank.bankId === selectedAccount.bankId) {
-        const acc = bank.accounts?.find(
-          (a: any) => a.accountId === selectedAccount.accountId
-        );
-        if (acc) return { ...acc, bankId: bank.bankId, bankName: bank.bankName };
-      }
-    }
-    return null;
-  })();
 
   // ── Auto-set billing period when credit card selected ──
   useEffect(() => {
@@ -239,6 +237,20 @@ const { selectedAccount, setSelectedAccount } = useAccountStore();
 
   const expenseCount = getAccountTransactions().filter((tx) => !tx.isSurplus).length;
 
+  // Resolve fresh account data from bankDataList (keeps data in sync)
+const selectedAccount = useMemo(() => {
+  if (!storedAccount) return null;
+  for (const bank of bankDataList) {
+    if (bank.bankId === storedAccount.bankId) {
+      const fresh = bank.accounts?.find(
+        (a: any) => a.accountId === storedAccount.accountId
+      );
+      if (fresh) return { ...fresh, bankId: bank.bankId, bankName: bank.bankName };
+    }
+  }
+  return storedAccount; // fallback to stored if not found yet
+}, [storedAccount, bankDataList]);
+
   if (isLoading) {
     return (
       <div className="flex items-center justify-center py-20">
@@ -246,6 +258,8 @@ const { selectedAccount, setSelectedAccount } = useAccountStore();
       </div>
     );
   }
+
+
 
   return (
     <AuthGuard>

@@ -73,12 +73,11 @@ function formatDateTR(date: Date): string {
 
 export default function AccountsPage() {
   const { bankDataList, loadAllData, isLoading, deleteAccount } = useTransactionStore();
-  const { selectedAccount, setSelectedAccount } = useAccountStore();
+  const { selectedAccount: storedAccount, setSelectedAccount } = useAccountStore();
+const selectedAccountId = storedAccount?.accountId;
   const user = useAuthStore(s => s.user);
   const [showAddBank, setShowAddBank] = useState(false);
   const [editingAccount, setEditingAccount] = useState<any>(null);
-
-  const selectedAccountId = selectedAccount?.accountId;
 
   useEffect(() => {
     loadAllData();
@@ -127,17 +126,14 @@ export default function AccountsPage() {
   };
 
 const handleDelete = async (acc: any) => {
-    try {
-      await deleteAccount(acc.accountId, acc.bankId);
-      // Clear global selection if deleted account was selected
-      if (selectedAccount?.accountId === acc.accountId) {
-        setSelectedAccount(null);
-      }
-      toast.success('Hesap ve ilgili işlemler silindi');
-    } catch {
-      toast.error('Hesap silinemedi');
-    }
-  };
+  try {
+    await deleteAccount(acc.accountId, acc.bankId);
+    if (storedAccount?.accountId === acc.accountId) setSelectedAccount(null);
+    toast.success('Hesap ve ilgili işlemler silindi');
+  } catch {
+    toast.error('Hesap silinemedi');
+  }
+};
 
 
   const handleAddBank = async (bank: any) => {
@@ -149,15 +145,13 @@ const handleDelete = async (acc: any) => {
     toast.success('Hesap eklendi');
   };
 
-    const handleSelect = (acc: any) => {
-    // Toggle: clicking selected account deselects it
-    if (selectedAccount?.accountId === acc.accountId) {
-      setSelectedAccount(null);
-    } else {
-      setSelectedAccount({ ...acc });
-    }
-  };
-
+const handleSelect = (acc: any) => {
+  if (storedAccount?.accountId === acc.accountId) {
+    setSelectedAccount(null); // deselect
+  } else {
+    setSelectedAccount({ ...acc });
+  }
+};
 
   if (isLoading) {
     return (
