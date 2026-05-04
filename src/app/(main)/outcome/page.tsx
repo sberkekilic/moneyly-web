@@ -216,21 +216,47 @@ const handleAccountChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
     .sort((a, b) => (b.totalsByCurrency[primaryCurrency] ?? 0) - (a.totalsByCurrency[primaryCurrency] ?? 0))
     .slice(0, 5);
 
-  const handleDelete = async (tx: Transaction) => {
-    if (!selectedAccount) return;
-    try {
-      const choice = tx.installment && tx.installment > 1 ? confirm(t.deleteAll) : false;
-      await deleteTransaction(
-        selectedAccount.accountId,
-        selectedAccount.bankId,
-        tx.transactionId,
-        choice
-      );
-      toast.success(t.deleted);
-    } catch {
-      toast.error(t.deleteFail);
-    }
-  };
+const handleDelete = async (tx: Transaction) => {
+  if (!selectedAccount) return;
+
+  const isInstallment =
+    tx.parentTransactionId !== undefined &&
+    tx.installment !== undefined &&
+    tx.installment > 1;
+
+  let deleteAll = false;
+
+  if (isInstallment) {
+    // Count remaining unpaid installments in this group
+    const siblings = transactions.filter(
+      (t) => t.parentTransactionId === tx.parentTransactionId
+    );
+    const paidCount = siblings.filter((t) => t.isInstallmentPaid).length;
+    const remaining = siblings.length - paidCount;
+
+    deleteAll = window.confirm(
+      `Bu işlem ${tx.currentInstallment}/${tx.installment}. taksit.\n\n` +
+      `Grupta ${siblings.length} taksit var (${paidCount} ödendi, ${remaining} kaldı).\n\n` +
+      `Tümünü silmek için Tamam, sadece bu taksiti silmek için İptal'e basın.`
+    );
+  }
+
+  try {
+    await deleteTransaction(
+      selectedAccount.accountId,
+      selectedAccount.bankId,
+      tx.transactionId,
+      deleteAll
+    );
+    toast.success(
+      deleteAll
+        ? `${tx.installment} taksit silindi`
+        : 'İşlem silindi'
+    );
+  } catch {
+    toast.error('İşlem silinemedi');
+  }
+};
 
   const handleEdit = (tx: Transaction) => setEditingTx(tx);
 

@@ -186,20 +186,10 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
 
       const idsToDelete = new Set<number>([transactionId]);
 
-      if (deleteAllInstallments) {
-        if (txToDelete.parentTransactionId) {
-          transactions
-            .filter((t) => t.parentTransactionId === txToDelete.parentTransactionId)
-            .forEach((t) => idsToDelete.add(t.transactionId));
-        } else if (txToDelete.initialInstallmentDate) {
-          transactions
-            .filter(
-              (t) =>
-                t.initialInstallmentDate === txToDelete.initialInstallmentDate &&
-                t.title === txToDelete.title
-            )
-            .forEach((t) => idsToDelete.add(t.transactionId));
-        }
+      if (deleteAllInstallments && txToDelete.parentTransactionId) {
+        transactions
+          .filter((t) => t.parentTransactionId === txToDelete.parentTransactionId)
+          .forEach((t) => idsToDelete.add(t.transactionId));
       }
 
       const updatedBanks = bankDataList.map((bank: any) => {
@@ -594,4 +584,54 @@ export const useTransactionStore = create<TransactionState>((set, get) => ({
   },
 
   setBankDataList: (data) => set({ bankDataList: data }),
+
+  addTransactionsBatch: (
+  txs: Transaction[],
+  accountId: number,
+  bankId: number
+) => Promise<void>;
+
+// Add to the store implementation after addTransaction:
+addTransactionsBatch: async (txs, accountId, bankId) => {
+  const user = useAuthStore.getState().user;
+  if (!user || txs.length === 0) return;
+  set({ isLoading: true, error: null });
+  try {
+    const { bankDataList, transactions } = get();
+    const cleanedTxs = txs.map(cleanForFirestore);
+
+    const updatedBanks = bankDataList.map((bank: any) => {
+      if (bank.bankId !== bankId) return bank;
+      return {
+        ...bank,
+        accounts: (bank.accounts || []).map((acc: any) => {
+          if (acc.accountId !== accountId) return acc;
+          const updated = {
+            ...acc,
+            transactions: [...(acc.transactions ?? []), ...cleanedTxs],
+          };
+          return acc.isDebit === false ? recalculateCreditAccount(updated) : updated;
+        }),
+      };
+    });
+
+    const allTransactions = [...transactions, ...cleanedTxs];
+
+    await FirestoreService.saveAllData(user.uid, {
+      bankData: updatedBanks,
+      transactions: allTransactions,
+    });
+
+    set({
+      bankDataList: updatedBanks,
+      transactions: allTransactions,
+      filteredTransactions: allTransactions,
+      isLoading: false,
+    });
+  } catch (e) {
+    console.error('Error adding transactions batch:', e);
+    set({ error: 'İşlemler eklenemedi', isLoading: false });
+    throw e;
+  }
+},
 }));

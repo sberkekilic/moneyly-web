@@ -41,7 +41,7 @@ export function AddTransactionModal({
   isCreditCard = false,
   onClose,
 }: AddTransactionModalProps) {
-  const { addTransaction } = useTransactionStore();
+  const { addTransaction, addTransactionsBatch } = useTransactionStore();
 
   const [title, setTitle] = useState('');
   const [amount, setAmount] = useState('');
@@ -92,23 +92,29 @@ export function AddTransactionModal({
         const firstDate = parseLocalDate(date);
 
         const allTransactions = Array.from({ length: installmentCount }, (_, i) => {
-          // i=0 → first installment on the entered date (e.g. Dec 21 2025)
-          // i=1 → second installment one month later (Jan 21 2026)
-          // etc.
           const txDate = new Date(
             firstDate.getFullYear(),
-            firstDate.getMonth() + i,   // ← month offset, JS handles year rollover
+            firstDate.getMonth() + i,
             firstDate.getDate(),
             12, 0, 0
           );
 
+          // ← Give each installment a guaranteed unique ID
+          const uniqueId = parentId + i + 1;
+
+          // Last installment gets the remainder to avoid rounding loss
+          const isLast = i === installmentCount - 1;
+          const thisAmount = isLast
+            ? Math.round((parsedAmount - installmentAmount * (installmentCount - 1)) * 100) / 100
+            : installmentAmount;
+
           return createTransaction({
+            transactionId: uniqueId,          // ← explicitly set unique ID
             title: title.trim(),
-            amount: installmentAmount,
-            totalAmount,
+            amount: thisAmount,               // ← corrected per-installment amount
+            totalAmount: parsedAmount,
             category: category.trim() || 'Diğer',
             subcategory: subcategory.trim() || 'Genel',
-            // Store as local ISO so display is never shifted
             date: toLocalISOString(txDate),
             isSurplus,
             currency,
@@ -116,16 +122,19 @@ export function AddTransactionModal({
             isFromInvoice: false,
             isProvisioned: false,
             installment: installmentCount,
-            currentInstallment: i + 1,          // 1-based
+            currentInstallment: i + 1,
             parentTransactionId: parentId,
             initialInstallmentDate: toLocalISOString(firstDate),
             transactionType: txType,
           });
         });
-
         // Save all installments one by one (or batch if your store supports it)
         for (const tx of allTransactions) {
-          await addTransaction(tx, selectedAccount.accountId, selectedAccount.bankId);
+          await addTransactionsBatch(
+            allTransactions,
+            selectedAccount.accountId,
+            selectedAccount.bankId
+          );
         }
 
         toast.success(
