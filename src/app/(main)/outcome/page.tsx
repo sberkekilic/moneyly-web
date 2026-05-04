@@ -161,17 +161,17 @@ export default function OutcomePage() {
     }
   };
 
-  const handleAccountChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const [bankIdStr, accountIdStr] = e.target.value.split('_');
-    const accountId = Number(accountIdStr);
-    for (const bank of bankDataList) {
-      const found = bank.accounts?.find((a: any) => a.accountId === accountId);
-      if (found) {
-        setSelectedAccount({ accountId: found.accountId, bankId: bank.bankId });
-        break;
-      }
+const handleAccountChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+  const [bankIdStr, accountIdStr] = e.target.value.split('_');
+  const accountId = Number(accountIdStr);
+  for (const bank of bankDataList) {
+    const found = bank.accounts?.find((a: any) => a.accountId === accountId);
+    if (found) {
+      setSelectedAccount({ ...found, bankId: bank.bankId, bankName: bank.bankName });
+      break;
     }
-  };
+  }
+};
 
   const getAccountTransactions = (): Transaction[] => {
     const txs: Transaction[] = selectedAccount?.transactions ?? [];
