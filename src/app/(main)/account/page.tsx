@@ -13,6 +13,7 @@ import Link from 'next/link';
 import { AuthGuard } from '@/components/AuthGuard';
 import { useSettingsStore } from '@/store/settingsStore';
 import { calculateCreditCardCycle } from '@/lib/creditCard';
+import { useAccountStore } from '@/store/accountStore';
 
 // ── Date helpers ──────────────────────────────────────────
 
@@ -72,14 +73,26 @@ function formatDateTR(date: Date): string {
 
 export default function AccountsPage() {
   const { bankDataList, loadAllData, isLoading, deleteAccount } = useTransactionStore();
+  const { selectedAccount, setSelectedAccount } = useAccountStore();
   const user = useAuthStore(s => s.user);
-  const [selectedAccountId, setSelectedAccountId] = useState<number | undefined>(undefined);
   const [showAddBank, setShowAddBank] = useState(false);
   const [editingAccount, setEditingAccount] = useState<any>(null);
+
+  const selectedAccountId = selectedAccount?.accountId;
 
   useEffect(() => {
     loadAllData();
   }, []);
+
+    // Auto-select first account if none selected
+  useEffect(() => {
+    if (bankDataList.length > 0 && !selectedAccount) {
+      const b = bankDataList[0];
+      if (b?.accounts?.[0]) {
+        setSelectedAccount({ ...b.accounts[0], bankId: b.bankId, bankName: b.bankName });
+      }
+    }
+  }, [bankDataList]);
 
   const allAccounts = bankDataList.flatMap((bank: any) =>
     (bank.accounts ?? []).map((acc: any) => ({
@@ -113,15 +126,19 @@ export default function AccountsPage() {
     toast.success('Hesap güncellendi');
   };
 
-  const handleDelete = async (acc: any) => {
+const handleDelete = async (acc: any) => {
     try {
       await deleteAccount(acc.accountId, acc.bankId);
-      if (selectedAccountId === acc.accountId) setSelectedAccountId(undefined);
+      // Clear global selection if deleted account was selected
+      if (selectedAccount?.accountId === acc.accountId) {
+        setSelectedAccount(null);
+      }
       toast.success('Hesap ve ilgili işlemler silindi');
     } catch {
       toast.error('Hesap silinemedi');
     }
   };
+
 
   const handleAddBank = async (bank: any) => {
     const user = useAuthStore.getState().user;
@@ -132,7 +149,15 @@ export default function AccountsPage() {
     toast.success('Hesap eklendi');
   };
 
-  const handleSelect = (acc: any) => setSelectedAccountId(acc.accountId);
+    const handleSelect = (acc: any) => {
+    // Toggle: clicking selected account deselects it
+    if (selectedAccount?.accountId === acc.accountId) {
+      setSelectedAccount(null);
+    } else {
+      setSelectedAccount({ ...acc });
+    }
+  };
+
 
   if (isLoading) {
     return (

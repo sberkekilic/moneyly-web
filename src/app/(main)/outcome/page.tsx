@@ -25,6 +25,7 @@ import {
   parseLocalDateInput,
   toDateInputValue,
 } from '@/lib/creditCard';
+import { useAccountStore } from '@/store/accountStore';
 
 const CATEGORY_COLORS = [
   '#3B82F6', '#F97316', '#14B8A6', '#8B5CF6',
@@ -63,10 +64,7 @@ export default function OutcomePage() {
   const { language } = useSettingsStore();
   const lang = language || 'tr';
 
-  const [selectedAccountRef, setSelectedAccountRef] = useState<{
-    accountId: number;
-    bankId: number;
-  } | null>(null);
+const { selectedAccount, setSelectedAccount } = useAccountStore();
   const [isLoading, setIsLoading] = useState(true);
   const [showAddModal, setShowAddModal] = useState(false);
   const [editingTx, setEditingTx] = useState<Transaction | null>(null);
@@ -111,24 +109,20 @@ export default function OutcomePage() {
   }, [user]);
 
   useEffect(() => {
-    if (bankDataList.length > 0 && !selectedAccountRef) {
-      const b = bankDataList[0];
-      if (b?.accounts?.[0]) {
-        setSelectedAccountRef({
-          accountId: b.accounts[0].accountId,
-          bankId: b.bankId,
-        });
-      }
-    }
-  }, [bankDataList]);
+  if (bankDataList.length > 0 && !selectedAccount) {
+    const b = bankDataList[0];
+    if (b?.accounts?.[0])
+      setSelectedAccount({ ...b.accounts[0], bankId: b.bankId, bankName: b.bankName });
+  }
+}, [bankDataList]);
 
   // ── Resolve selectedAccount from ref ──
   const selectedAccount = (() => {
-    if (!selectedAccountRef) return null;
+    if (!selectedAccount) return null;
     for (const bank of bankDataList) {
-      if (bank.bankId === selectedAccountRef.bankId) {
+      if (bank.bankId === selectedAccount.bankId) {
         const acc = bank.accounts?.find(
-          (a: any) => a.accountId === selectedAccountRef.accountId
+          (a: any) => a.accountId === selectedAccount.accountId
         );
         if (acc) return { ...acc, bankId: bank.bankId, bankName: bank.bankName };
       }
@@ -176,7 +170,7 @@ export default function OutcomePage() {
     for (const bank of bankDataList) {
       const found = bank.accounts?.find((a: any) => a.accountId === accountId);
       if (found) {
-        setSelectedAccountRef({ accountId: found.accountId, bankId: bank.bankId });
+        setSelectedAccount({ accountId: found.accountId, bankId: bank.bankId });
         break;
       }
     }

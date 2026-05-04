@@ -17,6 +17,7 @@ import { cn } from '@/lib/utils';
 import toast from 'react-hot-toast';
 import Link from 'next/link';
 import { AuthGuard } from '@/components/AuthGuard';
+import { useAccountStore } from '@/store/accountStore';
 
 // ── Types & Constants ─────────────────────────────────────
 
@@ -43,7 +44,7 @@ export default function IncomePage() {
   const { language } = useSettingsStore();
   const lang = language || 'tr';
 
-  const [selectedAccount, setSelectedAccount] = useState<any>(null);
+  const { selectedAccount, setSelectedAccount } = useAccountStore();
   const [isAddingIncome, setIsAddingIncome] = useState(false);
   const [editingIncome, setEditingIncome] = useState<Income | null>(null);
   const [selectedSourceIndex, setSelectedSourceIndex] = useState(0);

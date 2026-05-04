@@ -22,6 +22,7 @@ import {
   parseLocalDateInput,
   isDateInRangeInclusive,
 } from '@/lib/creditCard';
+import { useAccountStore } from '@/store/accountStore';
 
 // ── Currency helpers ──────────────────────────────────────
 
@@ -82,7 +83,7 @@ function buildValidTxIds(bankDataList: any[]): Set<number> {
 export default function HomePage() {
   const { transactions, loadAllData, bankDataList } = useTransactionStore();
   const { incomes, loadIncomes, getTotalIncome } = useIncomeStore();
-  const [selectedAccount, setSelectedAccount] = useState<any>(null);
+  const { selectedAccount, setSelectedAccount } = useAccountStore();
 
   const now = new Date();
   const defaultStart = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-01`;

@@ -1,3 +1,4 @@
+import { GlobalAccountBadge } from '@/components/GlobalAccountBadge';
 import { BottomNav } from '@/components/layout/BottomNav';
 import { Header } from '@/components/layout/Header';
 import { Sidebar } from '@/components/layout/Sidebar';
@@ -24,6 +25,7 @@ export default function MainLayout({
 
       {/* Bottom Nav - visible on mobile only */}
       <BottomNav />
+      <GlobalAccountBadge />
     </div>
   );
 }
